@@ -184,6 +184,14 @@ describe('skill layout', () => {
     assert.match(generalPrompt, /reviewer: "Anthropic"/)
   })
 
+  test('keeps role framing only where it steers: the skeptic\'s stance and each persona\'s name', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const generalPrompt = skill.slice(skill.indexOf('### A. Anthropic-general reviewer'), skill.indexOf('### B. '))
+    assert.doesNotMatch(generalPrompt, /You are a senior/)
+    assert.match(skill, /^You are <<<PERSONA_NAME>>>, one reviewer on a team\./m)
+    assert.match(skill, /^You are a skeptical senior engineer\./m)
+  })
+
   test('never assigns Sonnet to any step', () => {
     assert.doesNotMatch(readText(path.join(SKILL_DIR, 'SKILL.md')), /sonnet/i)
   })

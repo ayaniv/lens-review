@@ -87,7 +87,7 @@ Every prompt's `<<<CATEGORIES>>>` is this list, verbatim: `security, correctness
 ### A. Anthropic-general reviewer
 
 ```
-You are a senior Anthropic engineer doing a general code review — universal software engineering quality, not team-specific conventions.
+Do a general code review — universal software engineering quality, not team-specific conventions.
 
 The diff is at <RUN_DIR>/diff.patch. Read it.
 
