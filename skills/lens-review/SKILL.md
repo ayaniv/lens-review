@@ -14,6 +14,8 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 **Arguments.** `--base <ref>` (default: the remote's default branch, else a local `main`, else `master`), an optional GitHub PR URL, `--plan <path>` (repeatable: a plan or intent doc for this work that the PR doesn't carry itself, e.g. a task's `INTENT.md` or `tech-design.md`), and `--recast` (cast a fresh team even if one is saved).
 
+**Turns.** Each turn you take costs wall time, so make independent calls in one message: in Step 1, `gh pr view` with `gh pr diff`, then `discover-rule-sources.mjs`, `discover-plan-docs.mjs` and `team-dir.mjs` together once `RUN_DIR` exists. When agents run in parallel, wait until every one has answered before running that phase's script, rather than acting on each completion as it arrives.
+
 **Failure rule.** Every script exits non-zero with a `lens-review:` message naming the bad input. When one does, stop and show that message; never continue past a failed step.
 
 **Agent replies.** Every agent writes its own reply to a file: fill each prompt's `<<<REPLY_FILE>>>` with `<RUN_DIR>/reply-<name>.txt`, the name each step gives. The agent's message back is just `done`; never copy a reply out of an agent's message or transcript, never judge for yourself whether it is JSON, and never fix one up. Run `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<name>.txt" "<RUN_DIR>/<output>.json"`: it strips one code fence wrapped around the whole reply and nothing else. When the reply file is missing or isn't JSON, it exits non-zero and writes nothing: that agent failed, as each step below says, and the failure rule does not apply.
