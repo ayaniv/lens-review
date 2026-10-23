@@ -24,6 +24,7 @@ const EVAL_DIR = path.join(REPO_ROOT, 'tests', 'lens-review-eval')
 const SCORE_REVIEW = path.join(EVAL_DIR, 'score-review.mjs')
 const SEEDED_PR_DIR = path.join(EVAL_DIR, 'seeded-pr')
 const MERGE_FINDINGS = path.join(SCRIPTS_DIR, 'merge-findings.mjs')
+const BUILD_PR_REVIEW = path.join(SCRIPTS_DIR, 'build-pr-review.mjs')
 
 const CORE_PERSONAS = {
   'architect.md': 'The Architect',
@@ -97,6 +98,7 @@ describe('skill layout', () => {
       'scripts/team-dir.mjs',
       'scripts/validate-team.mjs',
       'scripts/select-team.mjs',
+      'scripts/build-pr-review.mjs',
       'checklist.md',
       'casting-prompt.md',
       'challenge-prompt.md',
@@ -205,6 +207,19 @@ describe('team', () => {
     assert.match(castStep, /git worktree add --detach "<RUN_DIR>\/base" "\$\(cat "<RUN_DIR>\/base\.txt"\)"/)
     assert.match(castStep, /git worktree remove --force "<RUN_DIR>\/base"/)
     assert.doesNotMatch(castStep, /`git ls-files/, 'casting inputs must come from the base checkout, not the PR branch')
+  })
+
+  test('posts to the PR only with --post, only after the developer says yes, and never retries a different review', async () => {
+    const { REVIEW_MARKER } = await import(BUILD_PR_REVIEW)
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const postStep = skill.slice(skill.indexOf('## Step 6'), skill.indexOf('\n## Cost\n'))
+    assert.match(postStep, /Skip this step unless `--post` was passed/)
+    assert.match(postStep, /Post this review to <url>\? \(yes\/no\)/)
+    assert.match(postStep, /Post only on an explicit yes/)
+    assert.match(postStep, /scripts\/build-pr-review\.mjs/)
+    assert.match(postStep, /differs from `<RUN_DIR>\/head\.txt`, \*\*stop\*\*/)
+    assert.match(postStep, /Never retry/)
+    assert.ok(postStep.includes(REVIEW_MARKER), 'the earlier-review check must look for the marker build-pr-review.mjs writes')
   })
 
   test('has a challenge prompt that shows the team the merged findings', () => {

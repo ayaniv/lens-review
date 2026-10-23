@@ -1,6 +1,6 @@
 ---
 name: lens-review
-description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--recast].
+description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. Usage — /lens-review [--base <ref>] [<GitHub PR URL> [--post]] [--recast].
 allowed-tools: ["Agent", "SendMessage", "ToolSearch", "Bash", "Glob", "Grep", "Read", "Write"]
 ---
 
@@ -12,7 +12,7 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 **Paths.** You run with the cwd set to the repo under review. `SKILL_DIR` below means this skill's base directory, the one Claude Code printed when the skill loaded; always call scripts as `node "<SKILL_DIR>/scripts/<file>"` with that absolute path substituted, never a cwd-relative path. Shell variables don't survive between Bash calls, so substitute the run dir and team dir literally too.
 
-**Arguments.** `--base <ref>` (default: the remote's default branch, else a local `main`, else `master`), an optional GitHub PR URL, and `--recast` (cast a fresh team even if one is saved).
+**Arguments.** `--base <ref>` (default: the remote's default branch, else a local `main`, else `master`), an optional GitHub PR URL, `--recast` (cast a fresh team even if one is saved), and `--post` (post the review to that PR, Step 6). `--post` without a PR URL: stop before Step 1 and say it needs one.
 
 **Failure rule.** Every script exits non-zero with a `lens-review:` message naming the bad input. When one does, stop and show that message; never continue past a failed step.
 
@@ -22,7 +22,7 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 ## Step 1 — Gather the diff
 
-- **PR URL given:** `gh pr view <url>` for the title and description, then `gh pr diff <url> > <a temp file>` and run `bash "<SKILL_DIR>/scripts/gather-diff.sh" --diff <that file>`.
+- **PR URL given:** `gh pr view <url> --json title,body,headRefOid` for the title, description and head commit, then `gh pr diff <url> > <a temp file>` and run `bash "<SKILL_DIR>/scripts/gather-diff.sh" --diff <that file>`. With `--post`, `Write` the `headRefOid` to `<RUN_DIR>/head.txt`: Step 6 anchors the comments to the commit this diff came from.
 - **Otherwise:** `bash "<SKILL_DIR>/scripts/gather-diff.sh"`, adding `--base <ref>` only when one was passed. Use `git log --format='%s%n%b' <base>..HEAD` as the PR context.
 
 `scripts/gather-diff.sh` prints a fresh per-run dir as its last line: `RUN_DIR`. It holds `diff.patch`, `files.txt` (the changed files) and `base.txt` (the commit the PR branched from, which casting reads). Every later file this run writes goes in `RUN_DIR`, so concurrent reviews never clobber each other.
@@ -269,6 +269,27 @@ Challenge round: <n> personas voted (continued|fresh), <k> contested   | or: Cha
 Failed reviewers: <names, or none>
 Dropped: <N> malformed findings, <M> votes
 ```
+
+---
+
+## Step 6 — Post to the PR (only with `--post`)
+
+Skip this step unless `--post` was passed. It writes publicly to someone's PR, so it never posts without the developer's yes. Take `<OWNER>`, `<REPO>` and `<NUMBER>` from the PR URL (`https://github.com/<OWNER>/<REPO>/pull/<NUMBER>`).
+
+1. Run `gh pr view <url> --json headRefOid --jq .headRefOid`. If it differs from `<RUN_DIR>/head.txt`, **stop**: the PR got new commits since its diff was gathered, so the comments would land on the wrong lines. Say so and suggest a re-run.
+2. `Write` `<RUN_DIR>/pr-summary.md`: the report's `## Lens Review` heading, `**Summary:**` line, Strengths and Verdict. Leave out the findings sections (they become the inline comments), the cost telemetry and the `Findings JSON:` line.
+3. Build the review:
+   ```bash
+   node "<SKILL_DIR>/scripts/build-pr-review.mjs" --findings "<RUN_DIR>/final-findings.json" --diff "<RUN_DIR>/diff.patch" --summary "<RUN_DIR>/pr-summary.md" --commit "$(cat "<RUN_DIR>/head.txt")" > "<RUN_DIR>/pr-review.json"
+   ```
+   `scripts/build-pr-review.mjs` always builds a plain `COMMENT` review, never an approval or a change request: the verdict is for the humans. Each finding becomes an inline comment on its line; one whose line isn't in the PR's diff goes in the review body under "Not on a changed line".
+4. Check for an earlier lens-review review: `gh api "repos/<OWNER>/<REPO>/pulls/<NUMBER>/reviews" --paginate --jq '[.[] | select(.body | contains("<!-- lens-review -->"))] | length'`. When it's above 0, say the PR already has that many; the new review is added next to them.
+5. Preview it: print the review body, then each inline comment as `<path>:<line>` followed by its body, then ask **"Post this review to <url>? (yes/no)"**. Post only on an explicit yes; on anything else, print `Not posted.` and stop.
+6. Post it:
+   ```bash
+   gh api --method POST "repos/<OWNER>/<REPO>/pulls/<NUMBER>/reviews" --input "<RUN_DIR>/pr-review.json" --jq .html_url
+   ```
+   Print the URL it returns. If it fails, show `gh`'s error verbatim and the payload path. Never retry with comments stripped or moved, since that would post a different review from the one the developer approved.
 
 ---
 

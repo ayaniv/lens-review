@@ -48,11 +48,15 @@ function toDiffFile(file, diffLines) {
   return suffixMatches.sort((first, second) => second.length - first.length)[0] ?? null
 }
 
+// True when `line` of the repo-relative `file` falls inside one of the diff's new-side hunks.
+export function isLineInDiff(diffLines, file, line) {
+  return diffLines.get(file)?.some(([start, end]) => line >= start && line <= end) ?? false
+}
+
 function outsideDiffReason(finding, diffLines) {
   const diffFile = toDiffFile(finding.file, diffLines)
   if (!diffFile) return `${finding.file} is not a file this diff changes`
-  const isInHunk = diffLines.get(diffFile).some(([start, end]) => finding.line >= start && finding.line <= end)
-  if (!isInHunk) return `line ${finding.line} is outside the diff of ${diffFile}`
+  if (!isLineInDiff(diffLines, diffFile, finding.line)) return `line ${finding.line} is outside the diff of ${diffFile}`
   return null
 }
 
