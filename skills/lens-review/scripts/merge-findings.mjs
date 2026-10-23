@@ -180,18 +180,22 @@ export function mergeFindings(findingsPerReviewer, diffLines) {
   return { findings: mergeDuplication(findings), dropped }
 }
 
-if (isRunDirectly(import.meta.url)) {
-  const usage = 'usage: merge-findings.mjs --diff <diff.patch> <findings.json>...'
-  const [flag, diffPath, ...findingsPaths] = process.argv.slice(2)
-  if (flag !== '--diff' || !diffPath) fail(`${usage} (--diff is required: findings are checked against it)`)
-  if (findingsPaths.length === 0) fail(`${usage} (no findings files given)`)
+export function readDiffLines(diffPath) {
   const patchText = readTextFile(diffPath)
   // Every path below is matched against the b/ side; a patch without prefixes would silently
   // drop every finding as "not a file this diff changes".
   if (/^\+\+\+ (?!b\/|\/dev\/null)/m.test(patchText)) {
     fail(`${diffPath} has file headers without the b/ prefix; regenerate it with --src-prefix=a/ --dst-prefix=b/`)
   }
-  const diffLines = parseDiffLines(patchText)
+  return parseDiffLines(patchText)
+}
+
+if (isRunDirectly(import.meta.url)) {
+  const usage = 'usage: merge-findings.mjs --diff <diff.patch> <findings.json>...'
+  const [flag, diffPath, ...findingsPaths] = process.argv.slice(2)
+  if (flag !== '--diff' || !diffPath) fail(`${usage} (--diff is required: findings are checked against it)`)
+  if (findingsPaths.length === 0) fail(`${usage} (no findings files given)`)
+  const diffLines = readDiffLines(diffPath)
   const { findings, dropped } = mergeFindings(findingsPaths.map(readJsonArrayFile), diffLines)
   reportDropped('findings', dropped)
   console.log(JSON.stringify(findings, null, 2))

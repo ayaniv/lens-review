@@ -99,6 +99,9 @@ describe('skill layout', () => {
       'scripts/validate-team.mjs',
       'scripts/select-team.mjs',
       'scripts/build-pr-review.mjs',
+      'scripts/collect-findings.mjs',
+      'scripts/collect-votes.mjs',
+      'scripts/apply-skeptic.mjs',
       'checklist.md',
       'casting-prompt.md',
       'challenge-prompt.md',
@@ -148,9 +151,15 @@ describe('skill layout', () => {
       }
     }
     assert.match(skill, /never copy a reply out of an agent's message or transcript/)
-    for (const output of ['findings-<agent>.json', 'votes-<persona-file-stem>.json', 'skeptic.json', 'cast.json']) {
-      assert.match(skill, new RegExp(`parse-reply\\.mjs" "[^"]+" "<RUN_DIR>/${output.replace(/[.<>]/g, '\\$&')}"`), `${output} is not written by parse-reply.mjs`)
-    }
+    assert.match(skill, /parse-reply\.mjs" "<RUN_DIR>\/reply-cast\.txt" "<RUN_DIR>\/cast\.json"/, 'cast.json is not written by parse-reply.mjs')
+  })
+
+  test('runs each phase\'s deterministic tail as one script call, never by hand', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.match(skill, /scripts\/collect-findings\.mjs" "<RUN_DIR>" "anthropic=Anthropic"/)
+    assert.match(skill, /scripts\/collect-votes\.mjs" "<RUN_DIR>"/)
+    assert.match(skill, /scripts\/apply-skeptic\.mjs" "<RUN_DIR>"/)
+    assert.doesNotMatch(skill, /final-findings\.json` with `Write`/, 'final-findings.json must come from a script')
   })
 
   test("the skeptic rules on each finding's own merits and never drops one for repeating another", () => {

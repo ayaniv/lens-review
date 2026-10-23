@@ -131,11 +131,11 @@ Write ONLY a JSON array to <<<REPLY_FILE>>> with the Write tool, no other text a
 ```
 `<<<SCOPE_NOTE>>>` is empty for a core persona (it reads the whole diff) and ` (these: <matchedBy>)` for a scoped one.
 
-**Collect.** For each agent, `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<agent>.txt" "<RUN_DIR>/findings-<agent>.json" --default-reviewer "<reviewer>"`, where `<reviewer>` is the name that agent's prompt gives it (`Anthropic`, or the persona's name), so a finding that leaves out `reviewer` is still credited to the agent that wrote it. When it exits non-zero, that agent is a **failed reviewer**: list it in the telemetry and go on with the rest. Then:
+**Collect.** Once every reviewer has answered, one call parses each reply and merges them:
 ```bash
-node "<SKILL_DIR>/scripts/merge-findings.mjs" --diff "<RUN_DIR>/diff.patch" "<RUN_DIR>"/findings-*.json > "<RUN_DIR>/merged.json"
+node "<SKILL_DIR>/scripts/collect-findings.mjs" "<RUN_DIR>" "anthropic=Anthropic" "<persona-file-stem>=<persona name>"...
 ```
-`scripts/merge-findings.mjs` merges the same issue flagged by several reviewers into one finding (highest severity, every reviewer in `reviewers`), gives each an `F<n>` id, and reports malformed findings on stderr — including any whose file isn't in the diff or whose line falls outside its changed hunks. Carry its "dropped N malformed findings" line into the telemetry. Never re-derive or restate its dedup rule here; the script is the one place it lives.
+Pass one `<stem>=<reviewer>` per agent you spawned, the reviewer being the name its prompt gives it, so a finding that leaves out `reviewer` is still credited to the agent that wrote it. `scripts/collect-findings.mjs` writes `findings-<stem>.json` per reviewer and `merged.json`, and prints `{failedReviewers, droppedFindings, findings}`: a reviewer whose reply file is missing or isn't a findings array is a **failed reviewer**, and the rest still merge. The merge (`scripts/merge-findings.mjs`) folds the same issue flagged by several reviewers into one finding with an `F<n>` id, and drops malformed findings, including any whose file isn't in the diff or whose line falls outside its changed hunks; stderr lists each one. Carry `failedReviewers` and `droppedFindings` into the telemetry. Never re-derive or restate the dedup rule here; the script is the one place it lives.
 
 ---
 
@@ -148,11 +148,11 @@ Fill `<SKILL_DIR>/challenge-prompt.md`'s `<<<MERGED_FINDINGS>>>` with `merged.js
 - **Continued (preferred):** load `SendMessage` with `ToolSearch` (`select:SendMessage`), then send the filled prompt to each persona agent from Step 2B. Each still holds the diff in context, so the turn is mostly cache reads.
 - **Fresh (fallback):** if `SendMessage` can't be loaded or a continuation fails, spawn one fresh `model: "haiku"` agent per persona with its persona file, the path to `<RUN_DIR>/diff.patch` (the hunks in its Scope), and the filled prompt. Don't let the round silently disappear.
 
-For each reply, `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-votes-<persona-file-stem>.txt" "<RUN_DIR>/votes-<persona-file-stem>.json"` (a non-zero exit counts as a failed voter in the telemetry), then:
+Once every persona has answered, one call parses each ballot and tallies them:
 ```bash
-node "<SKILL_DIR>/scripts/tally-challenges.mjs" "<RUN_DIR>/merged.json" "<RUN_DIR>"/votes-*.json > "<RUN_DIR>/tallied.json"
+node "<SKILL_DIR>/scripts/collect-votes.mjs" "<RUN_DIR>" <persona-file-stem>...
 ```
-`scripts/tally-challenges.mjs` attaches each finding's `challenge: {agree, dispute}`, marks it `contested` when disputes outnumber agreements, and reports dropped votes (unknown ids, unknown verdicts, self-votes) on stderr. Record `Challenge round: <n> personas voted (continued|fresh), <k> contested`.
+`scripts/collect-votes.mjs` writes `votes-<stem>.json` per persona and `tallied.json`, and prints `{voted, failedVoters, contested, droppedVotes}`. The tally (`scripts/tally-challenges.mjs`) attaches each finding's `challenge: {agree, dispute}`, marks it `contested` when disputes outnumber agreements, and drops votes it can't count (unknown ids, unknown verdicts, self-votes) with each one on stderr. When the round is skipped, run it with no stems, so `tallied.json` still exists. Record `Challenge round: <n> personas voted (continued|fresh), <k> contested`.
 
 ---
 
@@ -181,9 +181,11 @@ Write ONLY a JSON array with one entry per finding id to <<<REPLY_FILE>>> with t
 [{"id": "F<n>", "verdict": "keep" | "drop", "reason": "<one sentence>"}]
 ```
 
-Parse its reply with `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-skeptic.txt" "<RUN_DIR>/skeptic.json"`. If the skeptic fails, the parse exits non-zero, or `skeptic.json` leaves **any** finding id from `tallied.json` without a verdict, **stop** and say which ids it skipped. A finding the skeptic never ruled on would otherwise vanish from the report without a trace. Never print the unfiltered findings as the final review.
-
-Build `<RUN_DIR>/final-findings.json` with `Write`: every finding from `tallied.json` whose verdict is `keep`, unchanged (`id`, `file`, `line`, `severity`, `category`, `description`, `rule`, `reviewers`, `duplicates`, `locations`, `challenge`, `contested`), plus `"skeptic": {"verdict", "reason"}`.
+Then one call parses its reply, checks it, and builds the final findings:
+```bash
+node "<SKILL_DIR>/scripts/apply-skeptic.mjs" "<RUN_DIR>"
+```
+`scripts/apply-skeptic.mjs` writes `skeptic.json` and `final-findings.json` (every finding the skeptic kept, unchanged, plus its `skeptic: {verdict, reason}`), and prints `{kept, dropped}`. When the reply is missing or not JSON, or leaves **any** finding id from `tallied.json` without a keep/drop verdict, it exits non-zero naming the ids: **stop** and show that. A finding the skeptic never ruled on would otherwise vanish from the report without a trace. Never print the unfiltered findings as the final review. When `tallied.json` is `[]`, skip the skeptic and run the script anyway: it writes an empty `final-findings.json`.
 
 ---
 
