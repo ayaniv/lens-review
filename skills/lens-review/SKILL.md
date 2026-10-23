@@ -131,7 +131,7 @@ Return ONLY a JSON array, no other text and no code fence. Each finding: {file, 
 ```
 `<<<SCOPE_NOTE>>>` is empty for a core persona (it reads the whole diff) and ` (these: <matchedBy>)` for a scoped one.
 
-**Collect.** For each agent, `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<agent>.txt" "<RUN_DIR>/findings-<agent>.json"`. When it exits non-zero, that agent is a **failed reviewer**: list it in the telemetry and go on with the rest. Then:
+**Collect.** For each agent, `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<agent>.txt" "<RUN_DIR>/findings-<agent>.json" --default-reviewer "<reviewer>"`, where `<reviewer>` is the name that agent's prompt gives it (`Anthropic`, or the persona's name), so a finding that leaves out `reviewer` is still credited to the agent that wrote it. When it exits non-zero, that agent is a **failed reviewer**: list it in the telemetry and go on with the rest. Then:
 ```bash
 node "<SKILL_DIR>/scripts/merge-findings.mjs" --diff "<RUN_DIR>/diff.patch" "<RUN_DIR>"/findings-*.json > "<RUN_DIR>/merged.json"
 ```

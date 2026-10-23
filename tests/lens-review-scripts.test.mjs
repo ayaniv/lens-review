@@ -1072,11 +1072,11 @@ describe('parse-reply.mjs', () => {
     replyDir = makeTempDir('agent-reply')
   })
 
-  function parseReply(replyText) {
+  function parseReply(replyText, flags = []) {
     const replyPath = path.join(replyDir, 'reply.txt')
     const outPath = path.join(replyDir, 'findings.json')
     fs.writeFileSync(replyPath, replyText)
-    const result = runScript('node', [PARSE_REPLY, replyPath, outPath])
+    const result = runScript('node', [PARSE_REPLY, replyPath, outPath, ...flags])
     return { result, outPath }
   }
 
@@ -1092,6 +1092,31 @@ describe('parse-reply.mjs', () => {
       assert.equal(result.status, 0, result.stderr)
       assert.ok(JSON.parse(fs.readFileSync(outPath, 'utf8')))
     }
+  })
+
+  test('--default-reviewer credits a finding with no reviewer to the agent that wrote the reply', () => {
+    // The Maintainer's reply in the carpool #13 run: valid findings, no `reviewer` on any of them.
+    const reply = JSON.stringify([
+      { file: 'README.md', line: 188, severity: 'should', category: 'maintainability', description: 'The runbook misdescribes the seed refusal.' },
+      { file: 'e2e/a.spec.ts', line: 160, severity: 'suggestion', category: 'maintainability', description: 'Misleading name.', reviewer: 'The Architect' },
+    ])
+    const { result, outPath } = parseReply(reply, ['--default-reviewer', 'The Maintainer'])
+    assert.equal(result.status, 0, result.stderr)
+    const findings = JSON.parse(fs.readFileSync(outPath, 'utf8'))
+    assert.deepEqual(findings.map(written => written.reviewer), ['The Maintainer', 'The Architect'])
+  })
+
+  test('--default-reviewer refuses a reply that is not a findings array, so the agent counts as failed', () => {
+    const { result, outPath } = parseReply('{"persona": "X", "votes": []}', ['--default-reviewer', 'The Maintainer'])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /reply\.txt is not a JSON array of findings/)
+    assert.ok(!fs.existsSync(outPath))
+  })
+
+  test('--default-reviewer without a name fails with usage', () => {
+    const { result } = parseReply('[]', ['--default-reviewer'])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /needs a name/)
   })
 
   test('fails loudly, naming the reply, and writes nothing when the reply is not JSON', () => {
