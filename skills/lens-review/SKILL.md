@@ -72,7 +72,7 @@ node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<
 
 ## Step 2 — Spawn the reviewers in parallel (all Haiku 5.5)
 
-In a **single message**, spawn every agent below with `model: "haiku"`. Each reads the diff from `<RUN_DIR>/diff.patch` instead of getting it inline. That's 2 generic reviewers plus one agent per selected persona.
+In a **single message**, spawn every agent below with `model: "haiku"`. Each reads the diff from `<RUN_DIR>/diff.patch` instead of getting it inline. That's the Anthropic-general reviewer plus one agent per selected persona.
 
 Every prompt's `<<<CATEGORIES>>>` is this list, verbatim: `security, correctness, reliability, performance, architecture, maintainability, duplication, design-system, data, infra, domain, tests`. One shared vocabulary is what lets the merge step recognise two reviewers' findings as the same issue.
 
@@ -93,34 +93,17 @@ Focus ONLY on:
 - Memory leaks (missing cleanup, unrevoked ObjectURLs, stale subscriptions)
 - TypeScript type unsafety that strict mode doesn't catch
 - Missing error handling at system boundaries
-- Test gaps for new behavior that is entirely untested
+- Edge cases the new code gets wrong (empty, duplicate, out-of-order input)
+- Test gaps: new behavior or a new error path with no test
+- Tests that pass for the wrong reason: an assertion that can't fail, or a failure-path test that fails before it reaches the code it claims to cover
+- Dead code and needless complexity the PR adds
 
 Do NOT flag naming, formatting, styling, or anything team/company-specific.
 
 Return ONLY a JSON array, no other text and no code fence. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "Anthropic"}. Return [] if no issues.
 ```
 
-### B. Generic-PR reviewer
-
-```
-You are a senior engineer doing a thorough code review of a PR.
-
-The diff is at <RUN_DIR>/diff.patch. Read it.
-
-PR context:
-<<<PR_TITLE_AND_DESCRIPTION>>>
-
-Review for:
-- Correctness: logic errors, edge cases, off-by-ones, wrong assumptions
-- Code quality: clarity, unnecessary complexity, dead code, naming
-- Performance: unnecessary re-renders, expensive operations in hot paths, queries in loops
-- Test coverage: is new behavior tested? are edge cases / error paths covered?
-- Security: XSS, injection, sensitive data exposure
-
-Return ONLY a JSON array, no other text and no code fence. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "Generic"}. Return [] if no issues.
-```
-
-### C. One persona agent per selected persona
+### B. One persona agent per selected persona
 
 For each persona in `selected`, spawn one agent with this prompt. For The Maintainer, append the text of `<SKILL_DIR>/checklist.md` as its checklist. For The Reuse Scout, the agent also needs Grep and Glob, and its rules cap its searches.
 
@@ -162,7 +145,7 @@ node "<SKILL_DIR>/scripts/merge-findings.mjs" --diff "<RUN_DIR>/diff.patch" "<RU
 
 Fill `<SKILL_DIR>/challenge-prompt.md`'s `<<<MERGED_FINDINGS>>>` with `merged.json`.
 
-- **Continued (preferred):** load `SendMessage` with `ToolSearch` (`select:SendMessage`), then send the filled prompt to each persona agent from Step 2C. Each still holds the diff in context, so the turn is mostly cache reads.
+- **Continued (preferred):** load `SendMessage` with `ToolSearch` (`select:SendMessage`), then send the filled prompt to each persona agent from Step 2B. Each still holds the diff in context, so the turn is mostly cache reads.
 - **Fresh (fallback):** if `SendMessage` can't be loaded or a continuation fails, spawn one fresh `model: "haiku"` agent per persona with its persona file, the path to `<RUN_DIR>/diff.patch` (the hunks in its Scope), and the filled prompt. Don't let the round silently disappear.
 
 For each reply, `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-votes-<persona-file-stem>.txt" "<RUN_DIR>/votes-<persona-file-stem>.json"` (a non-zero exit counts as a failed voter in the telemetry), then:
@@ -260,7 +243,6 @@ Use the `usage` block from each Agent result, and the prices in `## Cost`.
 Cost breakdown (spawned agents only; this orchestrating session's own turns are excluded):
   Casting           (Opus):    ~Xk tokens   ~USD 0.XX   | or "skipped (team: loaded)"
   Anthropic-general (Haiku):   ~Xk tokens   ~USD 0.XX
-  Generic-PR        (Haiku):   ~Xk tokens   ~USD 0.XX
   <Persona>         (Haiku):   ~Xk tokens   ~USD 0.XX   (one line per persona)
   Challenge round   (Haiku):   ~Xk tokens   ~USD 0.XX
   Skeptic           (Opus):    ~Xk tokens   ~USD 0.XX
@@ -300,11 +282,11 @@ Every reviewer, persona and challenge turn runs on **Haiku 5.5** (USD 0.10 in / 
 | Agent | Count | Model |
 |---|---|---|
 | Casting | 1, first run per repo only (~USD 0.50–0.80) | Opus 5.5 |
-| Anthropic-general, Generic-PR | 2 | Haiku 5.5 |
+| Anthropic-general | 1 | Haiku 5.5 |
 | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
 | Team challenge | +1 turn per persona agent (fresh agents if `SendMessage` is unavailable, ~USD 0.05) | Haiku 5.5 |
 | Skeptic | 1 (~USD 0.30–0.50) | Opus 5.5 |
 
-At most 14 agents per run (15 on a repo's first run). Expect **~USD 0.50–1 per run for the spawned agents**, plus ~USD 0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
+At most 13 agents per run (14 on a repo's first run). Expect **~USD 0.50–1 per run for the spawned agents**, plus ~USD 0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
 
 **Alarm:** if a run goes over **USD 2 or 1M tokens**, something ballooned (a huge diff, or a team with too many scoped personas). Narrow the Scopes in `TEAM_DIR`, or split the PR, before running again.

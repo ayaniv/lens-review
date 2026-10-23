@@ -74,12 +74,12 @@ Every reviewer, persona and challenge turn runs on **Haiku 5.5**. Only two steps
 | Agent | Count | Model |
 |---|---|---|
 | Casting | 1, first run per repo only (~$0.50–0.80) | Opus 5.5 |
-| Anthropic-general, Generic-PR | 2 | Haiku 5.5 |
+| Anthropic-general | 1 | Haiku 5.5 |
 | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
 | Team challenge | +1 turn per persona agent | Haiku 5.5 |
 | Skeptic | 1 (~$0.30–0.50) | Opus 5.5 |
 
-A run uses at most 14 agents, or 15 on a repo's first run. Expect **~$0.50–1 per run** for the spawned agents, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Each run prints its cost telemetry after the report. If a run goes over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
+A run uses at most 13 agents, or 14 on a repo's first run. Expect **~$0.50–1 per run** for the spawned agents, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Each run prints its cost telemetry after the report. If a run goes over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
 
 ## Tests
 

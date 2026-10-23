@@ -154,6 +154,14 @@ describe('skill layout', () => {
     assert.match(skepticPrompt, /Never drop a finding because another finding repeats it/)
   })
 
+  test('runs one general reviewer, which also covers test strength, with no second generic one', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.doesNotMatch(skill, /Generic-PR/)
+    const generalPrompt = skill.slice(skill.indexOf('### A. Anthropic-general reviewer'), skill.indexOf('### B. '))
+    assert.match(generalPrompt, /Tests that pass for the wrong reason/)
+    assert.match(generalPrompt, /reviewer: "Anthropic"/)
+  })
+
   test('never assigns Sonnet to any step', () => {
     assert.doesNotMatch(readText(path.join(SKILL_DIR, 'SKILL.md')), /sonnet/i)
   })
