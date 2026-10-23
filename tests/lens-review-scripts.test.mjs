@@ -443,6 +443,103 @@ describe('merge-findings.mjs', () => {
   })
 })
 
+describe('merge-findings.mjs: duplication across copies', () => {
+  // Modelled on a real run: three e2e specs each re-declare helpers that an existing spec
+  // already has, and a migration copies an older function body. Two reviewers flagged every
+  // copy separately, which put seven near-identical comments on the PR.
+  const SPECS_DIFF = [
+    diffSection('e2e/second-parent.spec.ts', Array(80).fill('+x')),
+    diffSection('e2e/names-and-seats.spec.ts', Array(120).fill('+x')),
+    diffSection('e2e/standing-drives.spec.ts', Array(80).fill('+x')),
+    diffSection('supabase/migrations/2_drives.sql', Array(60).fill('+x')),
+  ].join('')
+  const copyFindings = {
+    generic: [
+      duplication('e2e/second-parent.spec.ts', 21, 'childButton and enterAs are redefined here and in two other specs.', { reviewer: 'Generic' }),
+      duplication('e2e/names-and-seats.spec.ts', 88, 'addFamily repeats the join_group call second-parent.spec.ts writes inline.', { reviewer: 'Generic', severity: 'suggestion' }),
+    ],
+    reuseScout: [
+      duplication('e2e/second-parent.spec.ts', 21, 'childButton and enterAs copy the invite helpers.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
+      duplication('supabase/migrations/2_drives.sql', 31, 'ensure_practices re-defines the init body.', { duplicates: 'supabase/migrations/1_init.sql:377', severity: 'must' }),
+      duplication('e2e/names-and-seats.spec.ts', 94, 'childButton is defined again with the same selector.', { duplicates: 'e2e/invite-link-access.spec.ts:27' }),
+      duplication('e2e/second-parent.spec.ts', 16, 'childButton is a third copy of the pick-child selector.', { duplicates: 'e2e/invite-link-access.spec.ts:27' }),
+      duplication('e2e/names-and-seats.spec.ts', 98, 'enterAs repeats the open-invite steps.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
+      duplication('e2e/standing-drives.spec.ts', 60, 'enterAs is a third copy of the open-invite steps.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
+      duplication('e2e/second-parent.spec.ts', 55, 'The inline join_group call repeats the addFamily helper.', { duplicates: 'e2e/names-and-seats.spec.ts:83' }),
+    ],
+  }
+  let mergeFindings
+  let specsDiffLines
+
+  function duplication(file, line, description, overrides = {}) {
+    return finding({ file, line, category: 'duplication', description, reviewer: 'The Reuse Scout', ...overrides })
+  }
+
+  beforeEach(async () => {
+    let parseDiffLines
+    ;({ mergeFindings, parseDiffLines } = await import(MERGE_FINDINGS))
+    specsDiffLines = parseDiffLines(SPECS_DIFF)
+  })
+
+  test('folds every copy of the duplicated helpers into one finding that lists each location', () => {
+    const { findings, dropped } = mergeFindings([copyFindings.generic, copyFindings.reuseScout], specsDiffLines)
+    assert.deepEqual(dropped, [])
+    const specCopies = findings.filter(merged => merged.file.startsWith('e2e/'))
+    assert.equal(specCopies.length, 1)
+    const [helpers] = specCopies
+    assert.deepEqual(
+      helpers.locations.map(({ file, line }) => `${file}:${line}`),
+      [
+        'e2e/second-parent.spec.ts:21',
+        'e2e/names-and-seats.spec.ts:88',
+        'e2e/names-and-seats.spec.ts:94',
+        'e2e/second-parent.spec.ts:16',
+        'e2e/names-and-seats.spec.ts:98',
+        'e2e/standing-drives.spec.ts:60',
+        'e2e/second-parent.spec.ts:55',
+      ],
+    )
+    assert.deepEqual(helpers.reviewers, ['Generic', 'The Reuse Scout'])
+    assert.equal(helpers.severity, 'should')
+    assert.equal(helpers.duplicates, 'e2e/invite-link-access.spec.ts:36')
+  })
+
+  test('keeps a duplication that shares no file and no helper with the others as its own finding', () => {
+    const { findings } = mergeFindings([copyFindings.generic, copyFindings.reuseScout], specsDiffLines)
+    const migrationCopy = findings.find(merged => merged.file === 'supabase/migrations/2_drives.sql')
+    assert.equal(migrationCopy.severity, 'must')
+    assert.equal(migrationCopy.locations, undefined)
+    assert.deepEqual(findings.map(merged => merged.id), ['F1', 'F2'])
+  })
+
+  test('links copies through a helper they both name, even in files nothing else shares', () => {
+    const { findings } = mergeFindings(
+      [
+        [
+          duplication('e2e/second-parent.spec.ts', 10, 'formatSeat repeats the seat label logic.'),
+          duplication('e2e/standing-drives.spec.ts', 10, 'A second formatSeat copy.'),
+        ],
+      ],
+      specsDiffLines,
+    )
+    assert.equal(findings.length, 1)
+    assert.equal(findings[0].locations.length, 2)
+  })
+
+  test('never folds findings of another category, even when they name the same helper', () => {
+    const { findings } = mergeFindings(
+      [
+        [
+          duplication('e2e/second-parent.spec.ts', 10, 'formatSeat repeats the seat label logic.'),
+          finding({ file: 'e2e/standing-drives.spec.ts', line: 10, category: 'correctness', description: 'formatSeat drops the last seat.' }),
+        ],
+      ],
+      specsDiffLines,
+    )
+    assert.equal(findings.length, 2)
+  })
+})
+
 describe('discover-rule-sources.mjs', () => {
   let discoverRuleSources
   let repoDir
@@ -1071,6 +1168,21 @@ describe('build-pr-review.mjs', () => {
       commitId: HEAD_SHA,
     })
     assert.match(review.comments[0].body, /Duplicates `src\/utils\/money\.ts:4`/)
+  })
+
+  test('posts a merged duplication once, listing every copy it stands for', () => {
+    const locations = [
+      { file: 'src/api.ts', line: 10, duplicates: 'src/utils/money.ts:4', description: 'formatMoney copy' },
+      { file: 'src/components/Checkout.tsx', line: 3, description: 'Another formatMoney copy' },
+    ]
+    const review = buildPrReview({
+      findings: [finalFinding({ category: 'duplication', duplicates: 'src/utils/money.ts:4', locations })],
+      diffLines,
+      summary: SUMMARY,
+      commitId: HEAD_SHA,
+    })
+    assert.equal(review.comments.length, 1)
+    assert.match(review.comments[0].body, /Every copy:\n- `src\/api\.ts:10` \(duplicates `src\/utils\/money\.ts:4`\)\n- `src\/components\/Checkout\.tsx:3`/)
   })
 
   test('keeps reviewer names off the PR', () => {

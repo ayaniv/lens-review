@@ -1,5 +1,6 @@
 // Merges the reviewer agents' findings into one list: the same issue flagged by several
-// reviewers becomes one finding with the highest severity and every reviewer's name.
+// reviewers becomes one finding with the highest severity and every reviewer's name, and
+// one duplicated helper flagged at each of its copies becomes one finding listing them all.
 // Findings that don't point into the diff under review are dropped, not merged.
 //
 //   node merge-findings.mjs --diff <diff.patch> <findings.json>...   → merged JSON array on stdout
@@ -104,6 +105,57 @@ function higherSeverity(first, second) {
   return SEVERITIES.indexOf(first) <= SEVERITIES.indexOf(second) ? first : second
 }
 
+const DUPLICATION_CATEGORY = 'duplication'
+// camelCase and snake_case code names: how a description names the helper it says is copied.
+const HELPER_NAME_RE = /\b(?:[a-z][a-z0-9]*[A-Z]\w*|[a-z][a-z0-9]*_[a-z0-9_]+)\b/g
+
+// What ties duplication findings into one issue: a file they share (where a copy sits, or
+// the existing code it copies) or a helper they both name. A helper copied into three files
+// is one fix, so it becomes one finding that lists every copy, not one comment per copy.
+function duplicationKeys(finding) {
+  const files = [finding.file, finding.duplicates?.split(':')[0].replace(/^\.\//, '')].filter(Boolean)
+  const helpers = finding.description.match(HELPER_NAME_RE) ?? []
+  return [...files.map(file => `file:${file}`), ...helpers.map(helper => `helper:${helper}`)]
+}
+
+function toLocation({ file, line, duplicates, description }) {
+  return { file, line, ...(duplicates && { duplicates }), description }
+}
+
+function foldDuplicationGroup(group) {
+  const [first, ...rest] = group
+  if (rest.length === 0) return first
+  return {
+    ...first,
+    severity: rest.reduce((severity, finding) => higherSeverity(severity, finding.severity), first.severity),
+    reviewers: [...new Set(group.flatMap(finding => finding.reviewers))],
+    duplicates: group.find(finding => finding.duplicates)?.duplicates,
+    locations: group.map(toLocation),
+  }
+}
+
+// Folds each connected group of duplication findings into its earliest one. Unlike the
+// same-line merge, one reviewer's findings fold together too: it flags each copy separately.
+function mergeDuplication(findings) {
+  const groups = []
+  const groupByKey = new Map()
+  for (const finding of findings) {
+    if (normalizeCategory(finding.category) !== DUPLICATION_CATEGORY) {
+      groups.push([finding])
+      continue
+    }
+    const linkedGroups = [...new Set(duplicationKeys(finding).map(key => groupByKey.get(key)).filter(Boolean))]
+    const group = [...linkedGroups.flat(), finding].sort((first, second) => findings.indexOf(first) - findings.indexOf(second))
+    for (const linkedGroup of linkedGroups) groups.splice(groups.indexOf(linkedGroup), 1)
+    groups.push(group)
+    for (const member of group) for (const key of duplicationKeys(member)) groupByKey.set(key, group)
+  }
+  return groups
+    .sort((first, second) => findings.indexOf(first[0]) - findings.indexOf(second[0]))
+    .map(foldDuplicationGroup)
+    .map((finding, index) => ({ ...finding, id: `F${index + 1}` }))
+}
+
 export function mergeFindings(findingsPerReviewer, diffLines) {
   const findings = []
   const dropped = []
@@ -125,7 +177,7 @@ export function mergeFindings(findingsPerReviewer, diffLines) {
       findings.push({ id: `F${findings.length + 1}`, ...issue, reviewers: [reviewer] })
     }
   }
-  return { findings, dropped }
+  return { findings: mergeDuplication(findings), dropped }
 }
 
 if (isRunDirectly(import.meta.url)) {

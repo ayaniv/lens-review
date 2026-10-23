@@ -200,7 +200,7 @@ Return ONLY a JSON array with one entry per finding id, no other text and no cod
 
 Parse its reply with `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-skeptic.txt" "<RUN_DIR>/skeptic.json"`. If the skeptic fails, the parse exits non-zero, or `skeptic.json` leaves **any** finding id from `tallied.json` without a verdict, **stop** and say which ids it skipped. A finding the skeptic never ruled on would otherwise vanish from the report without a trace. Never print the unfiltered findings as the final review.
 
-Build `<RUN_DIR>/final-findings.json` with `Write`: every finding from `tallied.json` whose verdict is `keep`, unchanged (`id`, `file`, `line`, `severity`, `category`, `description`, `rule`, `reviewers`, `duplicates`, `challenge`, `contested`), plus `"skeptic": {"verdict", "reason"}`.
+Build `<RUN_DIR>/final-findings.json` with `Write`: every finding from `tallied.json` whose verdict is `keep`, unchanged (`id`, `file`, `line`, `severity`, `category`, `description`, `rule`, `reviewers`, `duplicates`, `locations`, `challenge`, `contested`), plus `"skeptic": {"verdict", "reason"}`.
 
 ---
 
@@ -250,7 +250,7 @@ _(APPROVED = ready to send. CHANGES REQUIRED = address Must Fix items first.)_
 Findings JSON: <RUN_DIR>/final-findings.json
 ```
 
-A duplication finding also names the existing code: `— \`src/format.ts:4\` (duplicates \`src/utils/money.ts:2\`)`. Drop the per-finding reviewer names from the public findings list (they confuse PR authors); they stay in `final-findings.json`. Omit any findings section that is empty.
+A duplication finding also names the existing code: `— \`src/format.ts:4\` (duplicates \`src/utils/money.ts:2\`)`. A finding with `locations` stands for every copy it lists: name each one, `— \`e2e/a.spec.ts:21\`, \`e2e/b.spec.ts:16\` (duplicates \`e2e/helpers.ts:27\`)`. Drop the per-finding reviewer names from the public findings list (they confuse PR authors); they stay in `final-findings.json`. Omit any findings section that is empty.
 
 ### Cost telemetry (always print after the report)
 
