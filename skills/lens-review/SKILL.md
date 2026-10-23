@@ -1,6 +1,6 @@
 ---
 name: lens-review
-description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--recast].
+description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. When the review is of an open GitHub PR, offers to post it there as inline comments. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--recast].
 allowed-tools: ["Agent", "SendMessage", "ToolSearch", "Bash", "Glob", "Grep", "Read", "Write"]
 ---
 
@@ -22,10 +22,10 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 ## Step 1 — Gather the diff
 
-- **PR URL given:** `gh pr view <url>` for the title and description, then `gh pr diff <url> > <a temp file>` and run `bash "<SKILL_DIR>/scripts/gather-diff.sh" --diff <that file>`.
-- **Otherwise:** `bash "<SKILL_DIR>/scripts/gather-diff.sh"`, adding `--base <ref>` only when one was passed. Use `git log --format='%s%n%b' <base>..HEAD` as the PR context.
+- **PR URL given:** `gh pr view <url> --json title,body,headRefOid` for the title, description and head commit, then `gh pr diff <url> > <a temp file>` and run `bash "<SKILL_DIR>/scripts/gather-diff.sh" --diff <that file>`. `Write` the `headRefOid` to `<RUN_DIR>/head.txt`.
+- **Otherwise:** `bash "<SKILL_DIR>/scripts/gather-diff.sh"`, adding `--base <ref>` only when one was passed. Use `git log --format='%s%n%b' <base>..HEAD` as the PR context, and run `git rev-parse HEAD > "<RUN_DIR>/head.txt"`.
 
-`scripts/gather-diff.sh` prints a fresh per-run dir as its last line: `RUN_DIR`. It holds `diff.patch`, `files.txt` (the changed files) and `base.txt` (the commit the PR branched from, which casting reads). Every later file this run writes goes in `RUN_DIR`, so concurrent reviews never clobber each other.
+`scripts/gather-diff.sh` prints a fresh per-run dir as its last line: `RUN_DIR`. It holds `diff.patch`, `files.txt` (the changed files) and `base.txt` (the commit the PR branched from, which casting reads). `head.txt` (written just after) is the commit under review; Step 6 only posts onto a PR whose head is that same commit. Every later file this run writes goes in `RUN_DIR`, so concurrent reviews never clobber each other.
 
 Find the rule files that govern the changed files:
 ```bash
@@ -269,6 +269,27 @@ Challenge round: <n> personas voted (continued|fresh), <k> contested   | or: Cha
 Failed reviewers: <names, or none>
 Dropped: <N> malformed findings, <M> votes
 ```
+
+---
+
+## Step 6 — Offer to post the review to the PR
+
+Run this after the report whenever the review is of a GitHub PR. Posting writes publicly to someone's PR, so it never happens without the developer's yes.
+
+1. Find the PR. With a PR URL, that's the PR. Otherwise run `gh pr view --json url,headRefOid` for the current branch. If that fails, print `Not offered for posting: <first line of gh's error>` (no open PR, or `gh` missing or signed out) and end the run. That is not a failure.
+2. Run `gh pr view <url> --json headRefOid --jq .headRefOid`. If it differs from `<RUN_DIR>/head.txt`, do not offer to post: print `Not offered for posting: the PR's head is <sha>, but this review is of <head.txt>`, and say to push or re-run. Comments on a different commit would land on the wrong lines.
+3. Take `<OWNER>`, `<REPO>` and `<NUMBER>` from the URL (`https://github.com/<OWNER>/<REPO>/pull/<NUMBER>`). Fetch the PR's own diff with `gh pr diff <url> > "<RUN_DIR>/pr-diff.patch"`, since GitHub accepts inline comments only on lines in that diff. Then `Write` `<RUN_DIR>/pr-summary.md`: the report's `## Lens Review` heading, `**Summary:**` line, Strengths and Verdict. Leave out the findings sections (they become the inline comments), the cost telemetry and the `Findings JSON:` line. Build the review:
+   ```bash
+   node "<SKILL_DIR>/scripts/build-pr-review.mjs" --findings "<RUN_DIR>/final-findings.json" --diff "<RUN_DIR>/pr-diff.patch" --summary "<RUN_DIR>/pr-summary.md" --commit "$(cat "<RUN_DIR>/head.txt")" > "<RUN_DIR>/pr-review.json"
+   ```
+   `scripts/build-pr-review.mjs` always builds a plain `COMMENT` review, never an approval or a change request: the verdict is for the humans. Each finding becomes an inline comment on its line; one whose line isn't in the PR's diff goes in the review body under "Not on a changed line".
+4. Check for an earlier lens-review review: `gh api "repos/<OWNER>/<REPO>/pulls/<NUMBER>/reviews" --paginate --jq '[.[] | select(.body | contains("<!-- lens-review -->"))] | length'`. When it's above 0, say the PR already has that many; the new review is added next to them.
+5. Show what would be posted: the review body, then each inline comment as `<path>:<line>` followed by its body. Ask **"Post this review to <url> as inline comments? (yes/no)"**. On anything but an explicit yes, print `Not posted.` and end the run.
+6. Post it:
+   ```bash
+   gh api --method POST "repos/<OWNER>/<REPO>/pulls/<NUMBER>/reviews" --input "<RUN_DIR>/pr-review.json" --jq .html_url
+   ```
+   Print the URL it returns. If it fails, show `gh`'s error verbatim and the payload path. Never retry with comments stripped or moved, since that would post a different review from the one the developer approved.
 
 ---
 

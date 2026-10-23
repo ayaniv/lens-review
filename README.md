@@ -24,6 +24,13 @@ Run from inside the repo you want reviewed:
 
 The base defaults to the remote's default branch, then a local `main`, then `master`.
 
+**Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
+
+- Each finding becomes an inline comment on its line. The summary, strengths and verdict make up the review body.
+- A finding whose line isn't part of the PR's diff is listed in the body instead, so nothing is dropped.
+- It always posts as a plain **Comment** review, never Approve or Request changes.
+- It won't offer to post if the PR's head isn't the commit it reviewed (unpushed local commits, or new pushes during the review), because the comments would land on the wrong lines.
+
 ## The team
 
 The cast team is saved outside the reviewed repo, so a review never touches its working tree:

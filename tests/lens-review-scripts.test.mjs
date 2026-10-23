@@ -12,6 +12,7 @@ const VALIDATE_TEAM = path.join(SCRIPTS_DIR, 'validate-team.mjs')
 const SELECT_TEAM = path.join(SCRIPTS_DIR, 'select-team.mjs')
 const SAVE_CAST = path.join(SCRIPTS_DIR, 'save-cast.mjs')
 const PARSE_REPLY = path.join(SCRIPTS_DIR, 'parse-reply.mjs')
+const BUILD_PR_REVIEW = path.join(SCRIPTS_DIR, 'build-pr-review.mjs')
 
 // The developer's own example of a project persona, verbatim.
 const DESIGN_SYSTEM_GUARDIAN = `# Design System Guardian
@@ -796,5 +797,142 @@ describe('parse-reply.mjs', () => {
       assert.match(result.stderr, /reply\.txt/)
       assert.ok(!fs.existsSync(outPath))
     }
+  })
+})
+
+describe('build-pr-review.mjs', () => {
+  const HEAD_SHA = 'a'.repeat(40)
+  const SUMMARY = '## Lens Review: feature\n\n**Summary:** Adds the checkout API.'
+  let buildPrReview
+  let diffLines
+  let inputDir
+
+  beforeEach(async () => {
+    let parseDiffLines
+    ;({ buildPrReview } = await import(BUILD_PR_REVIEW))
+    ;({ parseDiffLines } = await import(MERGE_FINDINGS))
+    diffLines = parseDiffLines(DIFF_PATCH)
+    inputDir = makeTempDir('pr-review')
+    fs.writeFileSync(path.join(inputDir, 'diff.patch'), DIFF_PATCH)
+    fs.writeFileSync(path.join(inputDir, 'summary.md'), SUMMARY)
+    fs.writeFileSync(path.join(inputDir, 'final-findings.json'), '[]')
+  })
+
+  function finalFinding(overrides) {
+    const { reviewer, ...issue } = finding(overrides)
+    return { id: 'F1', ...issue, reviewers: [reviewer] }
+  }
+
+  function runBuild(findings) {
+    const findingsPath = path.join(inputDir, 'final-findings.json')
+    fs.writeFileSync(findingsPath, JSON.stringify(findings))
+    return runScript('node', [
+      BUILD_PR_REVIEW,
+      '--findings', findingsPath,
+      '--diff', path.join(inputDir, 'diff.patch'),
+      '--summary', path.join(inputDir, 'summary.md'),
+      '--commit', HEAD_SHA,
+    ])
+  }
+
+  test('always posts as a plain COMMENT review on the head commit, never an approval or a block', () => {
+    const review = buildPrReview({ findings: [finalFinding()], diffLines, summary: SUMMARY, commitId: HEAD_SHA })
+    assert.equal(review.event, 'COMMENT')
+    assert.equal(review.commit_id, HEAD_SHA)
+  })
+
+  test('puts a finding on a changed line inline, on the new side, with its severity, category and rule', () => {
+    const review = buildPrReview({
+      findings: [finalFinding({ severity: 'must', line: 12 })],
+      diffLines,
+      summary: SUMMARY,
+      commitId: HEAD_SHA,
+    })
+    assert.equal(review.comments.length, 1)
+    const [comment] = review.comments
+    assert.deepEqual({ path: comment.path, line: comment.line, side: comment.side }, { path: 'src/api.ts', line: 12, side: 'RIGHT' })
+    assert.match(comment.body, /^\*\*Must fix\*\* · correctness/)
+    assert.match(comment.body, /Missing await on save\(\)/)
+    assert.match(comment.body, /Async operations are awaited/)
+  })
+
+  test('names the existing code a duplication finding points at', () => {
+    const review = buildPrReview({
+      findings: [finalFinding({ category: 'duplication', duplicates: 'src/utils/money.ts:4' })],
+      diffLines,
+      summary: SUMMARY,
+      commitId: HEAD_SHA,
+    })
+    assert.match(review.comments[0].body, /Duplicates `src\/utils\/money\.ts:4`/)
+  })
+
+  test('keeps reviewer names off the PR', () => {
+    const review = buildPrReview({ findings: [finalFinding({ reviewer: 'The Reuse Scout' })], diffLines, summary: SUMMARY, commitId: HEAD_SHA })
+    assert.doesNotMatch(JSON.stringify(review), /Reuse Scout/)
+  })
+
+  test('moves a finding GitHub cannot anchor (outside the PR diff) into the review body instead of dropping it', () => {
+    const review = buildPrReview({
+      findings: [finalFinding({ id: 'F1', line: 12 }), finalFinding({ id: 'F2', line: 200, description: 'Stale cache key' })],
+      diffLines,
+      summary: SUMMARY,
+      commitId: HEAD_SHA,
+    })
+    assert.equal(review.comments.length, 1)
+    assert.match(review.body, /Not on a changed line/)
+    assert.match(review.body, /Stale cache key — `src\/api\.ts:200`/)
+  })
+
+  test('opens the body with the summary and tags it, so a later run can tell it posted before', async () => {
+    const { REVIEW_MARKER } = await import(BUILD_PR_REVIEW)
+    const review = buildPrReview({ findings: [], diffLines, summary: SUMMARY, commitId: HEAD_SHA })
+    assert.ok(review.body.startsWith(SUMMARY))
+    assert.ok(review.body.includes(REVIEW_MARKER))
+    assert.deepEqual(review.comments, [])
+  })
+
+  test('prints the payload and says how many findings went inline vs into the body', () => {
+    const result = runBuild([finalFinding({ id: 'F1', line: 12 }), finalFinding({ id: 'F2', line: 200 })])
+    assert.equal(result.status, 0, result.stderr)
+    const review = JSON.parse(result.stdout)
+    assert.equal(review.comments.length, 1)
+    assert.match(result.stderr, /1 inline, 1 in the review body/)
+  })
+
+  test('fails loudly on a finding it cannot render, naming it, rather than posting a partial review', () => {
+    const result = runBuild([finalFinding({ id: 'F7', severity: 'critical' })])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /F7/)
+    assert.equal(result.stdout, '')
+  })
+
+  test('refuses a commit that is not a full SHA, since GitHub would anchor the comments to the wrong code', () => {
+    const result = runScript('node', [
+      BUILD_PR_REVIEW,
+      '--findings', path.join(inputDir, 'final-findings.json'),
+      '--diff', path.join(inputDir, 'diff.patch'),
+      '--summary', path.join(inputDir, 'summary.md'),
+      '--commit', 'main',
+    ])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /--commit/)
+  })
+
+  test('fails with usage when a required flag is missing', () => {
+    const result = runScript('node', [BUILD_PR_REVIEW, '--findings', path.join(inputDir, 'final-findings.json')])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /usage: build-pr-review\.mjs/)
+  })
+
+  test('fails naming the file when an input cannot be read', () => {
+    const result = runScript('node', [
+      BUILD_PR_REVIEW,
+      '--findings', path.join(inputDir, 'final-findings.json'),
+      '--diff', path.join(inputDir, 'diff.patch'),
+      '--summary', path.join(inputDir, 'missing.md'),
+      '--commit', HEAD_SHA,
+    ])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /missing\.md/)
   })
 })
