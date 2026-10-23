@@ -8,7 +8,7 @@ allowed-tools: ["Agent", "SendMessage", "ToolSearch", "Bash", "Glob", "Grep", "R
 
 You are the orchestrator for a multi-persona PR review. Follow every step below, in order.
 
-Each persona is a lens on the PR. Five **core** personas (The Architect, The Maintainer, The Reliability Engineer, The Domain Expert, The Reuse Scout) review every PR. **Area** personas (The Backend Reviewer, The Design System Guardian, The Data Steward, The Infra Reviewer) and up to two **project** personas join only when a changed file matches their `Scope`. The team is cast once per repo and saved outside it, so the developer can hand-edit or add personas and the next run picks them up.
+Each persona is a lens on the PR. Five **core** personas (The Architect, The Maintainer, The Reliability Engineer, The Domain Expert, The Reuse Scout) review every PR. **Area** personas (The Backend Reviewer, The Design System Guardian, The Data Steward, The Infra Reviewer) and up to two **project** personas join only when a changed file matches their `Scope` or a changed line, in any file, matches one of their `Signals`: Scope says where a persona's code lives, Signals say what touching its concern looks like, so a lens follows its concern across the repo's layout. The team is cast once per repo and saved outside it, so the developer can hand-edit or add personas and the next run picks them up.
 
 **Paths.** You run with the cwd set to the repo under review. `SKILL_DIR` below means this skill's base directory, the one Claude Code printed when the skill loaded; always call scripts as `node "<SKILL_DIR>/scripts/<file>"` with that absolute path substituted, never a cwd-relative path. Shell variables don't survive between Bash calls, so substitute the run dir and team dir literally too.
 
@@ -64,9 +64,9 @@ Build every casting input from `<RUN_DIR>/base`. When casting ends, saved or fai
 
 **Pick the panel:**
 ```bash
-node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt"
+node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<RUN_DIR>/diff.patch"
 ```
-`scripts/select-team.mjs` returns `{panel, selected: [{file, name, matchedBy}], uncoveredFiles}`. `selected` is the panel for this PR: every core persona plus each scoped persona a changed file matched. Keep `panel` (the `Panel: …` line) and `uncoveredFiles` for the report header.
+`scripts/select-team.mjs` returns `{panel, selected: [{file, name, matchedBy}], uncoveredFiles}`. `selected` is the panel for this PR: every core persona plus each scoped persona that a changed file's path matched (Scope) or one of its added or removed lines matched (Signals); `matchedBy` lists those files. Keep `panel` (the `Panel: …` line) and `uncoveredFiles` for the report header.
 
 ---
 
@@ -130,7 +130,7 @@ You are <<<PERSONA_NAME>>>, one reviewer on a team. Review this PR only through 
 PERSONA FILE:
 <<<PERSONA_FILE>>>
 
-The diff is at <RUN_DIR>/diff.patch. Read only the hunks for files that match your Scope<<<SCOPE_NOTE>>>.
+The diff is at <RUN_DIR>/diff.patch. Read only the hunks for files that match your Scope or your Signals<<<SCOPE_NOTE>>>.
 
 PR context:
 <<<PR_TITLE_AND_DESCRIPTION>>>

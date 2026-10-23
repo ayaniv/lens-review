@@ -11,6 +11,9 @@ Scope:
 - k8s/**
 - helm/**
 
+Signals:
+- process\.env\.[A-Z][A-Z0-9_]*
+
 Rules:
 - [must] No secrets, tokens or credentials are committed in config, CI files or env files.
 - [should] Images, actions and tool versions are pinned (a version or digest, not `latest` or a moving branch).

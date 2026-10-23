@@ -5,6 +5,11 @@ Scope:
 - **/components/**
 - **/styles/**
 
+Signals:
+- style=\{\{
+- !important
+- ['"]#[0-9a-fA-F]{6}['"]
+
 Rules:
 - Flag visual overrides of design-system components from consuming applications.
 - Flag hardcoded values (colors, spacing, font sizes) where design tokens should be used.

@@ -10,6 +10,11 @@ Scope:
 - **/jobs/**
 - **/workers/**
 
+Signals:
+- \b(app|router)\.(get|post|put|patch|delete)\(
+- @(Get|Post|Put|Patch|Delete)\(
+- \breq\.(body|query|params)\b
+
 Rules:
 - [must] Every new or changed entry point (route, handler, job, RPC) checks the caller's authorization, not just authentication.
 - [must] Request input is validated at the boundary before it reaches business logic or the database.
