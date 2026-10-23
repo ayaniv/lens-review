@@ -169,6 +169,13 @@ describe('skill layout', () => {
     assert.match(skepticPrompt, /Never drop a finding because another finding repeats it/)
   })
 
+  test('the skeptic reads the plan and drops a finding that objects to what the plan requires', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const skepticPrompt = skill.slice(skill.indexOf('You are a skeptical senior engineer.'), skill.indexOf('<<<TALLIED_FINDINGS_JSON>>>'))
+    assert.ok(skepticPrompt.includes('<<<PLAN_DOCS>>>'))
+    assert.match(skepticPrompt, /Does the plan or design doc this PR implements require what the finding objects to\?/)
+  })
+
   test('runs one general reviewer, which also covers test strength, with no second generic one', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     assert.doesNotMatch(skill, /Generic-PR/)

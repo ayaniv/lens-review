@@ -173,21 +173,25 @@ node "<SKILL_DIR>/scripts/collect-votes.mjs" "<RUN_DIR>" <persona-file-stem>...
 
 ## Step 4 — Skeptic pass (Opus, single agent)
 
-Spawn ONE agent with `model: "opus"`, with `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-skeptic.txt`:
+Spawn ONE agent with `model: "opus"`, with `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-skeptic.txt` and `<<<PLAN_DOCS>>>` as the `PLAN_DOCS` paths, one per line (`none` when there are none):
 
 ```
 You are a skeptical senior engineer. Below are code review findings from a team of reviewers, with the team's own votes on each one.
 
 The diff is at <RUN_DIR>/diff.patch. Read it.
 
+PLAN DOCS (the plan or intent this PR implements; read them, or "none"):
+<<<PLAN_DOCS>>>
+
 For each finding, check:
 1. Does the cited file + line actually contain the issue described? (catch hallucinated line numbers)
 2. Is there enough diff context to confirm the rule was violated, or is it just a guess?
 3. Is the finding a false positive from a reviewer applying their lens too broadly?
+4. Does the plan or design doc this PR implements require what the finding objects to? If it does, drop the finding: the plan was already approved.
 
 You MUST rule explicitly on every finding with "contested": true. The team's disputes are evidence, not a veto: keep a contested finding when the diff proves it, drop it when the dispute holds.
 
-Never drop a finding because another finding repeats it. Merging repeats was done before you, and two findings that look alike can carry different evidence (a pointer to the existing code, a different reviewer's lens). Rule on each one by the three checks above alone.
+Never drop a finding because another finding repeats it. Merging repeats was done before you, and two findings that look alike can carry different evidence (a pointer to the existing code, a different reviewer's lens). Rule on each one by the four checks above alone.
 
 FINDINGS:
 <<<TALLIED_FINDINGS_JSON>>>

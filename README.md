@@ -25,7 +25,7 @@ Run from inside the repo you want reviewed:
 
 The base defaults to the remote's default branch, then a local `main`, then `master`.
 
-A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert and the Data Steward read it, so a PR that overtakes a sibling milestone, or does exactly what its plan asked, is judged against that plan.
+A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone, or does exactly what its plan asked, is judged against that plan.
 
 **Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
 
