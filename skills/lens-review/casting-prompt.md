@@ -49,6 +49,6 @@ RULE SOURCES (the repo's own AGENTS.md / CLAUDE.md / cursor / copilot rule files
 - A signal is a JavaScript regex (case-sensitive, no slashes or flags), tested on one changed line at a time, at most 200 characters, and it must not match an empty line. Make each one specific: a signal that matches ordinary lines (`import`, `return`, `=`) puts its persona on nearly every PR, and every extra persona is one more paid reviewer. At most 5 signals per persona.
 - Scope globs are repo-relative, with no leading `./` or `/`.
 
-Return ONLY a JSON array, one entry per persona, no other text and no code fence:
+Write ONLY a JSON array, one entry per persona, to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`.
 [{"file": "<kebab-case>.md", "markdown": "<the full persona file>"}]
 Keep the base profiles' file names for core and area personas.

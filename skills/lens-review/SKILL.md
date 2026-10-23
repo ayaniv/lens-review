@@ -16,7 +16,7 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 **Failure rule.** Every script exits non-zero with a `lens-review:` message naming the bad input. When one does, stop and show that message; never continue past a failed step.
 
-**Agent replies.** Never judge for yourself whether an agent's reply is JSON, and never fix one up. `Write` the reply verbatim to `<RUN_DIR>/reply-<name>.txt`, then run `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<name>.txt" "<RUN_DIR>/<output>.json"`. It strips one code fence wrapped around the whole reply and nothing else. When it exits non-zero, it has written nothing: that agent failed, as each step below says, and the failure rule does not apply.
+**Agent replies.** Every agent writes its own reply to a file: fill each prompt's `<<<REPLY_FILE>>>` with `<RUN_DIR>/reply-<name>.txt`, the name each step gives. The agent's message back is just `done`; never copy a reply out of an agent's message or transcript, never judge for yourself whether it is JSON, and never fix one up. Run `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<name>.txt" "<RUN_DIR>/<output>.json"`: it strips one code fence wrapped around the whole reply and nothing else. When the reply file is missing or isn't JSON, it exits non-zero and writes nothing: that agent failed, as each step below says, and the failure rule does not apply.
 
 ---
 
@@ -58,8 +58,8 @@ Build every casting input from `<RUN_DIR>/base`. When casting ends, saved or fai
    - `<<<REPO_DIRS>>>`: `git -C "<RUN_DIR>/base" ls-files | xargs -n1 dirname | sort -u` (cap at ~400 lines).
    - `<<<REPO_SIGNALS>>>`: the stack manifests at the root of `<RUN_DIR>/base` (`package.json`, `pyproject.toml`, `go.mod`, `Gemfile`, `Cargo.toml`, …, whichever exist), `ls` of that root, the first ~60 lines of its README, and `git -C "<RUN_DIR>/base" log -30 --format=%s`.
    - `<<<RULE_SOURCES>>>`: `git -C "<RUN_DIR>/base" ls-files > "<RUN_DIR>/all-files.txt"`, then `node "<SKILL_DIR>/scripts/discover-rule-sources.mjs" --repo "<RUN_DIR>/base" --files "<RUN_DIR>/all-files.txt"`, and the text of each file it lists under `<RUN_DIR>/base`, headed by its path. Cap at ~15k tokens, dropping the most deeply nested files first (ties: last in path order). The cast team is saved for every future PR, so the cut must not depend on which PR triggered it.
-2. Spawn ONE agent with `model: "opus"` and the prompt from `<SKILL_DIR>/casting-prompt.md` with those placeholders filled. Casting is the one step where judgement about the whole repo matters, and it runs once per repo.
-3. It returns `[{file, markdown}]`. Parse it with `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-cast.txt" "<RUN_DIR>/cast.json"` (a reply that isn't JSON is a failed cast, handled like a failed validation in 4), then save it with `node "<SKILL_DIR>/scripts/save-cast.mjs" "<TEAM_DIR>" "<RUN_DIR>/cast.json"`. Never `Write` persona files yourself: casting reads the reviewed repo's own rule files, so its output is untrusted, and `scripts/save-cast.mjs` refuses any file name that isn't a bare kebab-case `.md` name, or any persona that doesn't parse, before writing anything. Then run `scripts/validate-team.mjs` on `TEAM_DIR` (`team: cast`).
+2. Spawn ONE agent with `model: "opus"` and the prompt from `<SKILL_DIR>/casting-prompt.md` with those placeholders filled, and `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-cast.txt`. Casting is the one step where judgement about the whole repo matters, and it runs once per repo.
+3. It writes `[{file, markdown}]`. Parse it with `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-cast.txt" "<RUN_DIR>/cast.json"` (a reply that isn't JSON is a failed cast, handled like a failed validation in 4), then save it with `node "<SKILL_DIR>/scripts/save-cast.mjs" "<TEAM_DIR>" "<RUN_DIR>/cast.json"`. Never `Write` persona files yourself: casting reads the reviewed repo's own rule files, so its output is untrusted, and `scripts/save-cast.mjs` refuses any file name that isn't a bare kebab-case `.md` name, or any persona that doesn't parse, before writing anything. Then run `scripts/validate-team.mjs` on `TEAM_DIR` (`team: cast`).
 4. If saving or validation fails, show the errors, delete any written files and cast once more, adding the validation errors to the prompt. If the second cast fails too, **stop** with the errors.
 
 **Pick the panel:**
@@ -74,7 +74,7 @@ node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<
 
 In a **single message**, spawn every agent below with `model: "haiku"`. Each reads the diff from `<RUN_DIR>/diff.patch` instead of getting it inline. That's the Anthropic-general reviewer plus one agent per selected persona.
 
-Every prompt's `<<<CATEGORIES>>>` is this list, verbatim: `security, correctness, reliability, performance, architecture, maintainability, duplication, design-system, data, infra, domain, tests`. One shared vocabulary is what lets the merge step recognise two reviewers' findings as the same issue.
+Every prompt's `<<<CATEGORIES>>>` is this list, verbatim: `security, correctness, reliability, performance, architecture, maintainability, duplication, design-system, data, infra, domain, tests`. One shared vocabulary is what lets the merge step recognise two reviewers' findings as the same issue. `<<<REPLY_FILE>>>` is `<RUN_DIR>/reply-anthropic.txt` for A and `<RUN_DIR>/reply-<persona-file-stem>.txt` for each persona.
 
 ### A. Anthropic-general reviewer
 
@@ -100,7 +100,7 @@ Focus ONLY on:
 
 Do NOT flag naming, formatting, styling, or anything team/company-specific.
 
-Return ONLY a JSON array, no other text and no code fence. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "Anthropic"}. Return [] if no issues.
+Write ONLY a JSON array to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "Anthropic"}. Write [] if no issues.
 ```
 
 ### B. One persona agent per selected persona
@@ -127,7 +127,7 @@ INSTRUCTIONS:
 - Skip anything a linter or the type checker already enforces.
 - When a finding comes from a rule that cites `(source: <path>)`, say so in `rule`.
 
-Return ONLY a JSON array, no other text and no code fence. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "<<<PERSONA_NAME>>>"}. The Reuse Scout adds "duplicates": "<path>:<line>" pointing at the existing code. Return [] if no issues.
+Write ONLY a JSON array to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "<<<PERSONA_NAME>>>"}. The Reuse Scout adds "duplicates": "<path>:<line>" pointing at the existing code. Write [] if no issues.
 ```
 `<<<SCOPE_NOTE>>>` is empty for a core persona (it reads the whole diff) and ` (these: <matchedBy>)` for a scoped one.
 
@@ -143,7 +143,7 @@ node "<SKILL_DIR>/scripts/merge-findings.mjs" --diff "<RUN_DIR>/diff.patch" "<RU
 
 **Skip only when `merged.json` is `[]`**; then print `Challenge round: skipped (0 findings)` in the telemetry. Otherwise the round always runs; it is the team's chance to push back on each other.
 
-Fill `<SKILL_DIR>/challenge-prompt.md`'s `<<<MERGED_FINDINGS>>>` with `merged.json`.
+Fill `<SKILL_DIR>/challenge-prompt.md`'s `<<<MERGED_FINDINGS>>>` with `merged.json`, and its `<<<REPLY_FILE>>>` with `<RUN_DIR>/reply-votes-<persona-file-stem>.txt` for each persona.
 
 - **Continued (preferred):** load `SendMessage` with `ToolSearch` (`select:SendMessage`), then send the filled prompt to each persona agent from Step 2B. Each still holds the diff in context, so the turn is mostly cache reads.
 - **Fresh (fallback):** if `SendMessage` can't be loaded or a continuation fails, spawn one fresh `model: "haiku"` agent per persona with its persona file, the path to `<RUN_DIR>/diff.patch` (the hunks in its Scope), and the filled prompt. Don't let the round silently disappear.
@@ -158,7 +158,7 @@ node "<SKILL_DIR>/scripts/tally-challenges.mjs" "<RUN_DIR>/merged.json" "<RUN_DI
 
 ## Step 4 — Skeptic pass (Opus, single agent)
 
-Spawn ONE agent with `model: "opus"`:
+Spawn ONE agent with `model: "opus"`, with `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-skeptic.txt`:
 
 ```
 You are a skeptical senior engineer. Below are code review findings from a team of reviewers, with the team's own votes on each one.
@@ -177,7 +177,7 @@ Never drop a finding because another finding repeats it. Merging repeats was don
 FINDINGS:
 <<<TALLIED_FINDINGS_JSON>>>
 
-Return ONLY a JSON array with one entry per finding id, no other text and no code fence:
+Write ONLY a JSON array with one entry per finding id to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`.
 [{"id": "F<n>", "verdict": "keep" | "drop", "reason": "<one sentence>"}]
 ```
 

@@ -136,13 +136,18 @@ describe('skill layout', () => {
     }
   })
 
-  test('every agent prompt forbids a code fence, and every reply goes through parse-reply.mjs', () => {
+  test('every agent writes its own reply file, with no code fence, and every reply goes through parse-reply.mjs', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
-    for (const [name, text] of [['SKILL.md', skill], ['casting-prompt.md', readText(CASTING_PROMPT)], ['challenge-prompt.md', readText(CHALLENGE_PROMPT)]]) {
-      for (const returnLine of text.match(/^Return ONLY.*$/gm)) {
-        assert.match(returnLine, /no code fence/, `${name}: "${returnLine}"`)
+    const prompts = [['SKILL.md', skill, 3], ['casting-prompt.md', readText(CASTING_PROMPT), 1], ['challenge-prompt.md', readText(CHALLENGE_PROMPT), 1]]
+    for (const [name, text, agentCount] of prompts) {
+      assert.doesNotMatch(text, /^Return ONLY/m, `${name}: an agent still hands its JSON back in its message`)
+      const writeLines = text.match(/^Write ONLY.*$/gm) ?? []
+      assert.equal(writeLines.length, agentCount, `${name}: expected ${agentCount} reply instructions`)
+      for (const writeLine of writeLines) {
+        assert.match(writeLine, /to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence/, `${name}: "${writeLine}"`)
       }
     }
+    assert.match(skill, /never copy a reply out of an agent's message or transcript/)
     for (const output of ['findings-<agent>.json', 'votes-<persona-file-stem>.json', 'skeptic.json', 'cast.json']) {
       assert.match(skill, new RegExp(`parse-reply\\.mjs" "[^"]+" "<RUN_DIR>/${output.replace(/[.<>]/g, '\\$&')}"`), `${output} is not written by parse-reply.mjs`)
     }
