@@ -158,6 +158,12 @@ describe('skill layout', () => {
     assert.doesNotMatch(readText(path.join(SKILL_DIR, 'SKILL.md')), /sonnet/i)
   })
 
+  test('has no dollar sign before a digit, which Claude Code replaces with a skill argument', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const argumentPlaceholders = skill.split('\n').filter(line => /\$\d/.test(line))
+    assert.deepEqual(argumentPlaceholders, [])
+  })
+
   test('states its per-run cost budget', () => {
     assert.match(readText(path.join(SKILL_DIR, 'SKILL.md')), /^## Cost/m)
   })

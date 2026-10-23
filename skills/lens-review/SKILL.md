@@ -258,12 +258,12 @@ Use the `usage` block from each Agent result, and the prices in `## Cost`.
 
 ```
 Cost breakdown (spawned agents only; this orchestrating session's own turns are excluded):
-  Casting           (Opus):    ~Xk tokens   ~$0.XX   | or "skipped (team: loaded)"
-  Anthropic-general (Haiku):   ~Xk tokens   ~$0.XX
-  Generic-PR        (Haiku):   ~Xk tokens   ~$0.XX
-  <Persona>         (Haiku):   ~Xk tokens   ~$0.XX   (one line per persona)
-  Challenge round   (Haiku):   ~Xk tokens   ~$0.XX
-  Skeptic           (Opus):    ~Xk tokens   ~$0.XX
+  Casting           (Opus):    ~Xk tokens   ~USD 0.XX   | or "skipped (team: loaded)"
+  Anthropic-general (Haiku):   ~Xk tokens   ~USD 0.XX
+  Generic-PR        (Haiku):   ~Xk tokens   ~USD 0.XX
+  <Persona>         (Haiku):   ~Xk tokens   ~USD 0.XX   (one line per persona)
+  Challenge round   (Haiku):   ~Xk tokens   ~USD 0.XX
+  Skeptic           (Opus):    ~Xk tokens   ~USD 0.XX
   Total subagent:              ~Xk tokens   ~$X.XX
 Challenge round: <n> personas voted (continued|fresh), <k> contested   | or: Challenge round: skipped (0 findings)
 Failed reviewers: <names, or none>
@@ -295,16 +295,16 @@ Run this after the report whenever the review is of a GitHub PR. Posting writes 
 
 ## Cost
 
-Every reviewer, persona and challenge turn runs on **Haiku 5.5** ($0.10 in / $0.50 out per million tokens, for prompts up to 100K tokens; $0.50 / $2.50 beyond). Only casting (first run per repo) and the skeptic run on **Opus 5.5** ($4 / $20). No other model is used.
+Every reviewer, persona and challenge turn runs on **Haiku 5.5** (USD 0.10 in / USD 0.50 out per million tokens, for prompts up to 100K tokens; USD 0.50 / USD 2.50 beyond). Only casting (first run per repo) and the skeptic run on **Opus 5.5** (USD 4 / USD 20). No other model is used.
 
 | Agent | Count | Model |
 |---|---|---|
-| Casting | 1, first run per repo only (~$0.50–0.80) | Opus 5.5 |
+| Casting | 1, first run per repo only (~USD 0.50–0.80) | Opus 5.5 |
 | Anthropic-general, Generic-PR | 2 | Haiku 5.5 |
 | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
-| Team challenge | +1 turn per persona agent (fresh agents if `SendMessage` is unavailable, ~$0.05) | Haiku 5.5 |
-| Skeptic | 1 (~$0.30–0.50) | Opus 5.5 |
+| Team challenge | +1 turn per persona agent (fresh agents if `SendMessage` is unavailable, ~USD 0.05) | Haiku 5.5 |
+| Skeptic | 1 (~USD 0.30–0.50) | Opus 5.5 |
 
-At most 14 agents per run (15 on a repo's first run). Expect **~$0.50–1 per run for the spawned agents**, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
+At most 14 agents per run (15 on a repo's first run). Expect **~USD 0.50–1 per run for the spawned agents**, plus ~USD 0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
 
-**Alarm:** if a run goes over **$2 or 1M tokens**, something ballooned (a huge diff, or a team with too many scoped personas). Narrow the Scopes in `TEAM_DIR`, or split the PR, before running again.
+**Alarm:** if a run goes over **USD 2 or 1M tokens**, something ballooned (a huge diff, or a team with too many scoped personas). Narrow the Scopes in `TEAM_DIR`, or split the PR, before running again.
