@@ -1,0 +1,13 @@
+{
+  "name": "lens-review",
+  "version": "1.0.0",
+  "description": "A Claude Code skill: pre-PR review by a synthetic team of reviewer personas, cast per repo.",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

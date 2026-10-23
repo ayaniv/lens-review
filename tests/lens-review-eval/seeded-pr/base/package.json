@@ -1,0 +1,8 @@
+{
+  "name": "shop-demo",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "react": "18.3.1"
+  }
+}

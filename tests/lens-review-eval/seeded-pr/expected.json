@@ -1,0 +1,25 @@
+{
+  "must_catch": [
+    { "file": "src/orders.ts", "line_range": [10, 12], "category": "security", "source": "core-lens", "note": "SQL built by string concatenation" },
+    { "file": "src/orders.ts", "line_range": [14, 16], "source": "core-lens", "note": "db.insert not awaited" },
+    { "file": "src/orders.ts", "line_range": [19, 24], "source": "core-lens", "note": "one query per id inside a loop" },
+    {
+      "file": "src/components/Checkout.tsx",
+      "line_range": [6, 9],
+      "source": "project-rule",
+      "reviewer": "Guardian",
+      "note": "raw <button> with a hardcoded hex color, against AGENTS.md"
+    },
+    {
+      "file": "src/format.ts",
+      "line_range": [1, 4],
+      "source": "reuse",
+      "reviewer": "Reuse Scout",
+      "duplicates": "src/utils/money.ts",
+      "note": "formatAmount copies formatPrice's body"
+    }
+  ],
+  "must_drop": [
+    { "file": "src/render.ts", "line_range": [5, 7], "category": "security", "note": "innerHTML assigned a constant string literal: no user input, not XSS" }
+  ]
+}
