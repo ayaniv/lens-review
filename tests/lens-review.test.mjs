@@ -209,15 +209,17 @@ describe('team', () => {
     assert.doesNotMatch(castStep, /`git ls-files/, 'casting inputs must come from the base checkout, not the PR branch')
   })
 
-  test('posts to the PR only with --post, only after the developer says yes, and never retries a different review', async () => {
+  test('offers to post only for a PR whose head is the reviewed commit, posts only on yes, and never retries a different review', async () => {
     const { REVIEW_MARKER } = await import(BUILD_PR_REVIEW)
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     const postStep = skill.slice(skill.indexOf('## Step 6'), skill.indexOf('\n## Cost\n'))
-    assert.match(postStep, /Skip this step unless `--post` was passed/)
-    assert.match(postStep, /Post this review to <url>\? \(yes\/no\)/)
-    assert.match(postStep, /Post only on an explicit yes/)
+    assert.match(postStep, /gh pr view --json url,headRefOid/, 'a plain run must find the current branch\'s PR')
+    assert.match(postStep, /Not offered for posting: <first line of gh's error>/, 'no PR must be reported, not silent')
+    assert.match(postStep, /differs from `<RUN_DIR>\/head\.txt`, do not offer to post/)
+    assert.match(postStep, /Post this review to <url> as inline comments\? \(yes\/no\)/)
+    assert.match(postStep, /On anything but an explicit yes, print `Not posted\.`/)
+    assert.match(postStep, /gh pr diff <url> > "<RUN_DIR>\/pr-diff\.patch"/, 'comments must be built against the PR\'s own diff')
     assert.match(postStep, /scripts\/build-pr-review\.mjs/)
-    assert.match(postStep, /differs from `<RUN_DIR>\/head\.txt`, \*\*stop\*\*/)
     assert.match(postStep, /Never retry/)
     assert.ok(postStep.includes(REVIEW_MARKER), 'the earlier-review check must look for the marker build-pr-review.mjs writes')
   })

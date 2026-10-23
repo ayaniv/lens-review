@@ -1,4 +1,4 @@
-// Builds the GitHub review that `--post` sends: one COMMENT review on the PR's head commit,
+// Builds the GitHub review that Step 6 offers to post: one COMMENT review on the PR's head commit,
 // the summary as its body, and each final finding as an inline comment on its line. A
 // finding GitHub can't anchor (its line isn't in the PR's diff) goes into the body instead,
 // so nothing the skeptic kept is lost.

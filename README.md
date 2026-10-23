@@ -20,18 +20,16 @@ Run from inside the repo you want reviewed:
 /lens-review --base develop                    # current branch vs another base ref
 /lens-review https://github.com/org/repo/pull/123   # a GitHub PR
 /lens-review --recast                          # throw away the saved team and cast a fresh one
-/lens-review https://github.com/org/repo/pull/123 --post   # review it, then post the review to the PR
 ```
 
 The base defaults to the remote's default branch, then a local `main`, then `master`.
 
-Without `--post`, the review is printed in your terminal only. With `--post`, the review goes onto the PR as one GitHub review, after the terminal report:
+**Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
 
 - Each finding becomes an inline comment on its line. The summary, strengths and verdict make up the review body.
 - A finding whose line isn't part of the PR's diff is listed in the body instead, so nothing is dropped.
 - It always posts as a plain **Comment** review, never Approve or Request changes.
-- It shows you exactly what it will post and posts only after you answer yes.
-- It refuses to post if the PR got new commits during the review, because the comments would land on the wrong lines.
+- It won't offer to post if the PR's head isn't the commit it reviewed (unpushed local commits, or new pushes during the review), because the comments would land on the wrong lines.
 
 ## The team
 
