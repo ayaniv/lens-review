@@ -19,10 +19,13 @@ Run from inside the repo you want reviewed:
 /lens-review                                   # current branch vs the default branch
 /lens-review --base develop                    # current branch vs another base ref
 /lens-review https://github.com/org/repo/pull/123   # a GitHub PR
+/lens-review --plan ../tasks/x/tech-design.md  # also check the PR against a plan it doesn't carry
 /lens-review --recast                          # throw away the saved team and cast a fresh one
 ```
 
 The base defaults to the remote's default branch, then a local `main`, then `master`.
+
+A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert and the Data Steward read it, so a PR that overtakes a sibling milestone, or does exactly what its plan asked, is judged against that plan.
 
 **Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
 

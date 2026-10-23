@@ -1420,3 +1420,50 @@ describe('apply-skeptic.mjs', () => {
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runDir, 'final-findings.json'), 'utf8')), [])
   })
 })
+
+describe('discover-plan-docs.mjs', () => {
+  const DISCOVER_PLAN_DOCS = path.join(SCRIPTS_DIR, 'discover-plan-docs.mjs')
+  let inputDir
+  let filesPath
+
+  beforeEach(() => {
+    inputDir = makeTempDir('plan-docs')
+    filesPath = path.join(inputDir, 'files.txt')
+    fs.writeFileSync(
+      filesPath,
+      ['docs/tech-design-names-parents-seats.md', 'supabase/migrations/20261024000001_standing_drives.sql', 'README.md', 'src/plan.ts', 'tasks/x/INTENT.md'].join('\n'),
+    )
+  })
+
+  test('finds the plan and intent docs the PR changes, and nothing else', () => {
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+  })
+
+  test('puts a plan the caller passes first, and lists each path once', () => {
+    const passedPlan = path.join(inputDir, 'tech-design.md')
+    fs.writeFileSync(passedPlan, '# Plan\n')
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', passedPlan, '--plan', passedPlan])
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), [passedPlan, 'docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+  })
+
+  test('returns [] for a PR that changes no plan doc', () => {
+    fs.writeFileSync(filesPath, 'src/a.ts\n')
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
+    assert.deepEqual(JSON.parse(result.stdout), [])
+  })
+
+  test('fails naming a passed plan that does not exist, rather than reviewing without it', () => {
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', '/nonexistent/tech-design.md'])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /plan doc not found: \/nonexistent\/tech-design\.md/)
+  })
+
+  test('fails with usage when --files is missing', () => {
+    const result = runScript('node', [DISCOVER_PLAN_DOCS])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /usage: discover-plan-docs\.mjs/)
+  })
+})

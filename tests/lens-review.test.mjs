@@ -102,6 +102,7 @@ describe('skill layout', () => {
       'scripts/collect-findings.mjs',
       'scripts/collect-votes.mjs',
       'scripts/apply-skeptic.mjs',
+      'scripts/discover-plan-docs.mjs',
       'checklist.md',
       'casting-prompt.md',
       'challenge-prompt.md',
@@ -276,6 +277,20 @@ describe('team', () => {
     assert.match(postStep, /scripts\/build-pr-review\.mjs/)
     assert.match(postStep, /Never retry/)
     assert.ok(postStep.includes(REVIEW_MARKER), 'the earlier-review check must look for the marker build-pr-review.mjs writes')
+  })
+
+  test('gives the plan docs to the Domain Expert and the Data Steward, whose findings depend on the plan', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.match(skill, /scripts\/discover-plan-docs\.mjs" --files "<RUN_DIR>\/files\.txt"/)
+    const personaPrompt = skill.slice(skill.indexOf('### B. One persona agent'), skill.indexOf('**Collect.**'))
+    assert.ok(personaPrompt.includes('<<<PLAN_NOTE>>>'))
+    assert.match(personaPrompt, /the persona is The Domain Expert or The Data Steward/)
+  })
+
+  test('the Data Steward keeps migrations in order with the planned and unmerged ones', async () => {
+    const { parsePersona } = await import(VALIDATE_TEAM)
+    const { rules } = parsePersona(readText(path.join(TEAM_DIR, 'data-steward.md')))
+    assert.ok(rules.some(rule => rule.severity === 'must' && /timestamp sorts after every migration already merged and before none that is planned or still unmerged/.test(rule.text)))
   })
 
   test('has a challenge prompt that shows the team the merged findings', () => {

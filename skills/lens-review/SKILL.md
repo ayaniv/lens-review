@@ -1,6 +1,6 @@
 ---
 name: lens-review
-description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. When the review is of an open GitHub PR, offers to post it there as inline comments. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--recast].
+description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. When the review is of an open GitHub PR, offers to post it there as inline comments. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--plan <path>] [--recast].
 allowed-tools: ["Agent", "SendMessage", "ToolSearch", "Bash", "Glob", "Grep", "Read", "Write"]
 ---
 
@@ -12,7 +12,7 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 **Paths.** You run with the cwd set to the repo under review. `SKILL_DIR` below means this skill's base directory, the one Claude Code printed when the skill loaded; always call scripts as `node "<SKILL_DIR>/scripts/<file>"` with that absolute path substituted, never a cwd-relative path. Shell variables don't survive between Bash calls, so substitute the run dir and team dir literally too.
 
-**Arguments.** `--base <ref>` (default: the remote's default branch, else a local `main`, else `master`), an optional GitHub PR URL, and `--recast` (cast a fresh team even if one is saved).
+**Arguments.** `--base <ref>` (default: the remote's default branch, else a local `main`, else `master`), an optional GitHub PR URL, `--plan <path>` (repeatable: a plan or intent doc for this work that the PR doesn't carry itself, e.g. a task's `INTENT.md` or `tech-design.md`), and `--recast` (cast a fresh team even if one is saved).
 
 **Failure rule.** Every script exits non-zero with a `lens-review:` message naming the bad input. When one does, stop and show that message; never continue past a failed step.
 
@@ -32,6 +32,12 @@ Find the rule files that govern the changed files:
 node "<SKILL_DIR>/scripts/discover-rule-sources.mjs" --repo . --files "<RUN_DIR>/files.txt"
 ```
 `scripts/discover-rule-sources.mjs` returns `[{path, kind}]`, nearest AGENTS.md / CLAUDE.md first, then the repo-wide cursor and copilot rules. Read them; they override generic rules.
+
+Find the plan this PR implements, adding one `--plan "<path>"` per `--plan` argument:
+```bash
+node "<SKILL_DIR>/scripts/discover-plan-docs.mjs" --files "<RUN_DIR>/files.txt"
+```
+`scripts/discover-plan-docs.mjs` returns the paths of the plan and intent docs the PR changes, plus the passed ones: `PLAN_DOCS`. It may be `[]`.
 
 ---
 
@@ -120,6 +126,7 @@ PR context:
 
 REPO RULE FILES (they override generic rules when they conflict):
 <<<RULE_SOURCE_PATHS>>>
+<<<PLAN_NOTE>>>
 
 INSTRUCTIONS:
 - Only flag issues clearly present in the diff; cite the file path exactly as the diff shows it (repo-relative, never absolute) and the exact line number on the new side of the diff.
@@ -130,6 +137,14 @@ INSTRUCTIONS:
 Write ONLY a JSON array to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "<<<PERSONA_NAME>>>"}. The Reuse Scout adds "duplicates": "<path>:<line>" pointing at the existing code. Write [] if no issues.
 ```
 `<<<SCOPE_NOTE>>>` is empty for a core persona (it reads the whole diff) and ` (these: <matchedBy>)` for a scoped one.
+
+`<<<PLAN_NOTE>>>` is empty unless `PLAN_DOCS` has paths and the persona is The Domain Expert or The Data Steward, the two whose findings depend on what the plan says. For them it is:
+```
+
+PLAN DOCS (the plan or intent this PR implements; read them):
+<PLAN_DOCS, one path per line>
+Check the PR against them: what its part of the plan requires, and what the plan has shipping before or alongside it (sibling milestones, their migrations, flags) that this PR could collide with or overtake.
+```
 
 **Collect.** Once every reviewer has answered, one call parses each reply and merges them:
 ```bash
