@@ -206,6 +206,14 @@ describe('skill layout', () => {
     assert.doesNotMatch(skill, /final-findings\.json` with `Write`/, 'final-findings.json must come from a script')
   })
 
+  // No persona or repo rule asked for this, and 13 live carpool runs missed the must-level
+  // case of it: real-looking people, relations and schedules in an e2e spec.
+  test('the checklist and the deep pass both look for real people\'s details committed to the repo', () => {
+    const rule = /real people's personal details/i
+    assert.match(readText(path.join(SKILL_DIR, 'checklist.md')), rule)
+    assert.match(readText(path.join(SKILL_DIR, 'reviewer-deep-pass-prompt.md')), rule)
+  })
+
   // A live carpool run lost its whole review to a skeptic that skipped 2 of 23 ids.
   test('asks the skeptic once for the ids it left unruled before stopping', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))

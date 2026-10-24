@@ -9,6 +9,7 @@ Focus ONLY on:
 - Logic bugs, off-by-one errors, wrong conditionals
 - Race conditions and async correctness (missing awaits, stale closures)
 - Security vulnerabilities (XSS, injection, sensitive data exposure)
+- Real people's personal details committed in code, tests, fixtures, seeds, docs or comments (names tied to a relationship, a schedule, contact details)
 - Memory leaks (missing cleanup, unrevoked ObjectURLs, stale subscriptions)
 - TypeScript type unsafety that strict mode doesn't catch
 - Missing error handling at system boundaries
