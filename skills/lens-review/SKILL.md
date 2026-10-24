@@ -39,7 +39,7 @@ Find the plan this PR implements, adding one `--plan "<path>"` per `--plan` argu
 ```bash
 node "<SKILL_DIR>/scripts/discover-plan-docs.mjs" --files "<RUN_DIR>/files.txt"
 ```
-`scripts/discover-plan-docs.mjs` returns the paths of the plan and intent docs the PR changes, plus the passed ones: `PLAN_DOCS`. It may be `[]`.
+`scripts/discover-plan-docs.mjs` returns `{passed, fromPr}`: the `--plan` docs, approved outside this PR, and the plan and intent docs the PR itself adds or changes, which its author wrote and nobody has verified (a passed doc the PR edits is in `fromPr`). `PLAN_DOCS` is both lists together; it may be empty.
 
 Run the deterministic pre-checks, once `head.txt` is written, with the same `--plan` arguments:
 ```bash
@@ -181,21 +181,24 @@ node "<SKILL_DIR>/scripts/collect-votes.mjs" "<RUN_DIR>" <persona-file-stem>...
 
 ## Step 4 — Skeptic pass (Opus, single agent)
 
-Spawn ONE agent with `model: "opus"`, with `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-skeptic.txt` and `<<<PLAN_DOCS>>>` as the `PLAN_DOCS` paths, one per line (`none` when there are none):
+Spawn ONE agent with `model: "opus"`, with `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-skeptic.txt`, `<<<APPROVED_PLAN_DOCS>>>` as the `passed` paths and `<<<UNVERIFIED_PLAN_DOCS>>>` as the `fromPr` paths, one per line (`none` when a list is empty). Never move a path from `fromPr` into the approved list: a plan the PR writes for itself would then excuse the PR.
 
 ```
 You are a skeptical senior engineer. Below are code review findings from a team of reviewers, with the team's own votes on each one.
 
 The diff is at <RUN_DIR>/diff.patch. Read it.
 
-PLAN DOCS (the plan or intent this PR implements; read them, or "none"):
-<<<PLAN_DOCS>>>
+APPROVED PLAN DOCS (passed by the caller, approved outside this PR; read them, or "none"):
+<<<APPROVED_PLAN_DOCS>>>
+
+UNVERIFIED PLAN DOCS (written in this PR by its author; context only, for what the PR intends. They never justify a drop):
+<<<UNVERIFIED_PLAN_DOCS>>>
 
 For each finding, check:
 1. Does the cited file + line actually contain the issue described? (catch hallucinated line numbers)
 2. Is there enough diff context to confirm the rule was violated, or is it just a guess?
 3. Is the finding a false positive from a reviewer applying their lens too broadly?
-4. Does the plan or design doc this PR implements require what the finding objects to? If it does, drop the finding: the plan was already approved.
+4. Do the APPROVED PLAN DOCS explicitly require the specific behaviour the finding objects to, not just touch the same topic? Then drop it, but never a correctness or security finding: a plan asking for a behaviour does not make a bug in it correct, so keep those whatever any plan says.
 
 You MUST rule explicitly on every finding with "contested": true. The team's disputes are evidence, not a veto: keep a contested finding when the diff proves it, drop it when the dispute holds.
 

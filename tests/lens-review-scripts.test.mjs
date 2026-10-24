@@ -1504,24 +1504,33 @@ describe('discover-plan-docs.mjs', () => {
     )
   })
 
-  test('finds the plan and intent docs the PR changes, and nothing else', () => {
+  test('finds the plan and intent docs the PR changes, and nothing else, as the PR\'s own', () => {
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [], fromPr: ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'] })
   })
 
-  test('puts a plan the caller passes first, and lists each path once', () => {
+  test('lists a plan the caller passes apart from the PR\'s own, once each', () => {
     const passedPlan = path.join(inputDir, 'tech-design.md')
     fs.writeFileSync(passedPlan, '# Plan\n')
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', passedPlan, '--plan', passedPlan])
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), [passedPlan, 'docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [passedPlan], fromPr: ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'] })
   })
 
-  test('returns [] for a PR that changes no plan doc', () => {
+  test('a passed plan the PR itself changes stays the PR\'s own: passing it does not vouch for the PR\'s edits', () => {
+    const repoDir = makeTempDir('plan-repo')
+    writeFiles(repoDir, { 'docs/tech-design-names-parents-seats.md': '# Plan\n' })
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', 'docs/tech-design-names-parents-seats.md'], { cwd: repoDir })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).passed, [])
+    assert.ok(JSON.parse(result.stdout).fromPr.includes('docs/tech-design-names-parents-seats.md'))
+  })
+
+  test('returns no plan docs for a PR that changes none', () => {
     fs.writeFileSync(filesPath, 'src/a.ts\n')
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
-    assert.deepEqual(JSON.parse(result.stdout), [])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [], fromPr: [] })
   })
 
   test('fails naming a passed plan that does not exist, rather than reviewing without it', () => {

@@ -28,7 +28,7 @@ The base defaults to the remote's default branch, then a local `main`, then `mas
 
 **Your own taste (opt-in).** `--taste <path>` adds your personal rules file, e.g. the "engineering taste" section of `~/.claude/CLAUDE.md`, to the rule sources the team is cast from. Each of its rules lands in the persona that owns that lens, marked `(source: taste)`, and the repo's own rules win where the two conflict. To set it once, export `LENS_REVIEW_TASTE=<path>`; `--taste` overrides it. Nothing else under `~/.claude` is ever read. The taste is baked into the team when it's cast, so after changing which taste file you use (or editing it), run once with `--recast`.
 
-A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone, or does exactly what its plan asked, is judged against that plan.
+A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone is judged against that plan. A plan the PR writes for itself is only context, though: the skeptic drops a finding for what a plan asks only when that plan came in through `--plan`, and never drops a correctness or security finding on a plan's say-so.
 
 **Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
 

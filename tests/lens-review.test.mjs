@@ -170,11 +170,39 @@ describe('skill layout', () => {
     assert.match(skepticPrompt, /Never drop a finding because another finding repeats it/)
   })
 
-  test('the skeptic reads the plan and drops a finding that objects to what the plan requires', () => {
-    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
-    const skepticPrompt = skill.slice(skill.indexOf('You are a skeptical senior engineer.'), skill.indexOf('<<<TALLIED_FINDINGS_JSON>>>'))
-    assert.ok(skepticPrompt.includes('<<<PLAN_DOCS>>>'))
-    assert.match(skepticPrompt, /Does the plan or design doc this PR implements require what the finding objects to\?/)
+  describe('skeptic check 4: which plan can justify a drop', () => {
+    const skeptic = () => {
+      const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+      const prompt = skill.slice(skill.indexOf('You are a skeptical senior engineer.'), skill.indexOf('<<<TALLIED_FINDINGS_JSON>>>'))
+      const dropCheck = prompt.split('\n').find(line => /^4\. /.test(line))
+      const fillRule = skill.slice(skill.indexOf('## Step 4'), skill.indexOf('You are a skeptical senior engineer.'))
+      return { prompt, dropCheck, fillRule }
+    }
+
+    test('only the plan docs the caller passed can justify a drop', () => {
+      const { dropCheck, fillRule } = skeptic()
+      assert.ok(dropCheck.includes('APPROVED PLAN DOCS'), dropCheck)
+      assert.match(fillRule, /<<<APPROVED_PLAN_DOCS>>>` as the `passed` paths/)
+    })
+
+    test('a plan doc the PR adds or changes can never appear in the drop rule', () => {
+      const { dropCheck, fillRule } = skeptic()
+      assert.ok(!dropCheck.includes('UNVERIFIED'), 'check 4 must not name the PR\'s own plan docs')
+      assert.match(fillRule, /<<<UNVERIFIED_PLAN_DOCS>>>` as the `fromPr` paths/)
+      assert.doesNotMatch(fillRule, /APPROVED_PLAN_DOCS>>>` as the `fromPr`/)
+    })
+
+    test('calls the PR\'s own plan docs unverified context, never approved', () => {
+      const { prompt } = skeptic()
+      const unverifiedBlock = prompt.slice(prompt.indexOf('UNVERIFIED PLAN DOCS'), prompt.indexOf('<<<UNVERIFIED_PLAN_DOCS>>>'))
+      assert.match(unverifiedBlock, /context only/)
+      assert.doesNotMatch(unverifiedBlock, /approved/i)
+    })
+
+    test('never drops a correctness or security finding because a plan asks for the behaviour', () => {
+      const { dropCheck } = skeptic()
+      assert.match(dropCheck, /never.*correctness or security/i)
+    })
   })
 
   test('runs one general reviewer, which also covers test strength, with no second generic one', () => {
@@ -319,6 +347,7 @@ describe('team', () => {
   test('gives the plan docs to the Domain Expert and the Data Steward, whose findings depend on the plan', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     assert.match(skill, /scripts\/discover-plan-docs\.mjs" --files "<RUN_DIR>\/files\.txt"/)
+    assert.match(skill, /`<<<PLAN_NOTE>>>` is empty unless `PLAN_DOCS` has paths/)
     const personaPrompt = skill.slice(skill.indexOf('### B. One persona agent'), skill.indexOf('**Collect.**'))
     assert.ok(personaPrompt.includes('<<<PLAN_NOTE>>>'))
     assert.match(personaPrompt, /the persona is The Domain Expert or The Data Steward/)
