@@ -13,7 +13,7 @@ function isInRange(finding, seeded) {
   return finding.file === seeded.file && finding.line >= firstLine && finding.line <= lastLine
 }
 
-function matchesSeed(finding, seeded) {
+export function matchesSeed(finding, seeded) {
   if (!isInRange(finding, seeded)) return false
   if (seeded.category && normalizeCategory(finding.category ?? '') !== normalizeCategory(seeded.category)) return false
   if (seeded.reviewer && !(finding.reviewers ?? []).some(reviewer => reviewer.includes(seeded.reviewer))) return false

@@ -1,0 +1,159 @@
+{
+  "case": "ayaniv/carpool PR #13 at f68d794",
+  "note": "Union of the confirmed findings of the old lens run, the new lens run and the single-agent Opus review, each checked against change.patch. Recorded by location and category only: change.patch has every Hebrew word and every name-bearing identifier replaced with a placeholder, so nothing here says who anyone is. `alternates` are other spots (or categories) where the same issue is equally well cited.",
+  "issues": [
+    {
+      "id": "K1",
+      "file": "e2e/standing-drives.spec.ts",
+      "line_range": [1, 20],
+      "category": "data",
+      "severity": "must",
+      "summary": "The spec's header comment and fixture constants carry what look like real team members, with a relation and a fixed rota; the repo's rule is placeholders only.",
+      "alternates": [
+        { "file": "e2e/standing-drives.spec.ts", "line_range": [1, 20], "category": "security" },
+        { "file": "e2e/standing-drives.spec.ts", "line_range": [1, 20], "category": "domain" },
+        { "file": "e2e/standing-drives.spec.ts", "line_range": [115, 120], "category": "data" }
+      ]
+    },
+    {
+      "id": "K2",
+      "file": "README.md",
+      "line_range": [179, 201],
+      "category": "data",
+      "severity": "should",
+      "summary": "The runbook describes the real roster (which of the team's children lack an area, who is missing from the sheet) instead of generic steps.",
+      "alternates": [
+        { "file": "README.md", "line_range": [179, 201], "category": "domain" },
+        { "file": "README.md", "line_range": [179, 201], "category": "security" }
+      ]
+    },
+    {
+      "id": "K3",
+      "file": "supabase/migrations/20261024000001_standing_drives.sql",
+      "line_range": [1, 12],
+      "category": "data",
+      "severity": "should",
+      "summary": "This migration's timestamp sorts after the sibling milestone's planned, unmerged migration (needs: none), so whichever ships second is refused by `supabase db push`.",
+      "alternates": [
+        { "file": "supabase/migrations/20261024000001_standing_drives.sql", "line_range": [1, 12], "category": "infra" },
+        { "file": "supabase/migrations/20261024000001_standing_drives.sql", "line_range": [1, 12], "category": "reliability" },
+        { "file": "docs/tech-design-names-parents-seats.md", "line_range": [17, 24], "category": "data" }
+      ]
+    },
+    {
+      "id": "K4",
+      "file": "supabase/families-seed.template.sql",
+      "line_range": [50, 54],
+      "category": "correctness",
+      "severity": "should",
+      "summary": "The drive's family is looked up by child name with a non-STRICT select into, so two children with one name silently get an arbitrary one.",
+      "alternates": [{ "file": "supabase/families-seed.template.sql", "line_range": [50, 54], "category": "reliability" }]
+    },
+    {
+      "id": "K5",
+      "file": "supabase/families-seed.template.sql",
+      "line_range": [55, 58],
+      "category": "tests",
+      "severity": "should",
+      "summary": "The seed's 'no practice on weekday' refusal has no failure-path test; the other refusals each have one.",
+      "alternates": [{ "file": "src/data/familiesSeed.test.ts", "line_range": [49, 99], "category": "tests" }]
+    },
+    {
+      "id": "K6",
+      "file": "supabase/families-seed.template.sql",
+      "line_range": [59, 62],
+      "category": "correctness",
+      "severity": "suggestion",
+      "summary": "The header promises a re-run replaces a loaded drive, but a drop leaves the old row and a family moving between the cars of one leg hits the unique (slot, direction, parent) key and aborts.",
+      "alternates": [
+        { "file": "supabase/families-seed.template.sql", "line_range": [59, 62], "category": "reliability" },
+        { "file": "supabase/families-seed.template.sql", "line_range": [1, 4], "category": "correctness" }
+      ]
+    },
+    {
+      "id": "K7",
+      "file": "src/data/familiesSeed.test.ts",
+      "line_range": [74, 80],
+      "category": "tests",
+      "severity": "suggestion",
+      "summary": "The re-run test is titled 'no second drive' but only compares parent and child ids; standing_drives is never checked."
+    },
+    {
+      "id": "K8",
+      "file": "src/data/familiesSeed.test.ts",
+      "line_range": [82, 87],
+      "category": "tests",
+      "severity": "suggestion",
+      "summary": "The area-refusal test fails on the first family, before any insert, so its 'adds no one' assertion cannot fail."
+    },
+    {
+      "id": "K9",
+      "file": "src/data/familiesSeed.test.ts",
+      "line_range": [50, 59],
+      "category": "tests",
+      "severity": "suggestion",
+      "summary": "'adds every family' asserts only more than one family, so a dropped placeholder row still passes."
+    },
+    {
+      "id": "K10",
+      "file": "e2e/names-and-seats.spec.ts",
+      "line_range": [155, 165],
+      "category": "tests",
+      "severity": "should",
+      "summary": "The cross-family update check reads only `.data ?? []`, so a request that errors for an unrelated reason passes as 'denied'.",
+      "alternates": [{ "file": "e2e/names-and-seats.spec.ts", "line_range": [155, 165], "category": "correctness" }]
+    },
+    {
+      "id": "K11",
+      "file": "e2e/standing-drives.spec.ts",
+      "line_range": [152, 160],
+      "category": "tests",
+      "severity": "should",
+      "summary": "The outsider read check reads only `.data ?? []`, so an erroring read passes as 'no rows visible'.",
+      "alternates": [{ "file": "e2e/standing-drives.spec.ts", "line_range": [152, 160], "category": "correctness" }]
+    },
+    {
+      "id": "K12",
+      "file": "e2e/second-parent.spec.ts",
+      "line_range": [14, 26],
+      "category": "duplication",
+      "severity": "should",
+      "summary": "childButton and enterAs are redefined in three new specs, and the existing invite-link-access spec already has the pick-child helpers.",
+      "alternates": [
+        { "file": "e2e/names-and-seats.spec.ts", "line_range": [92, 106], "category": "duplication" },
+        { "file": "e2e/standing-drives.spec.ts", "line_range": [58, 70], "category": "duplication" }
+      ]
+    },
+    {
+      "id": "K13",
+      "file": "e2e/second-parent.spec.ts",
+      "line_range": [50, 66],
+      "category": "duplication",
+      "severity": "suggestion",
+      "summary": "second-parent writes the join_group RPC call and its row check inline, repeating names-and-seats' addFamily helper.",
+      "alternates": [{ "file": "e2e/names-and-seats.spec.ts", "line_range": [83, 92], "category": "duplication" }]
+    }
+  ],
+  "left_out": [
+    {
+      "raised_by": "old lens F12, new lens F2 (dropped)",
+      "summary": "The family loop silently skips a child whose name already exists.",
+      "reason": "The plan specifies the seed is idempotent per child name, and the header says why (a family that joined through the link keeps its family); the single-agent review confirmed it matches the plan."
+    },
+    {
+      "raised_by": "old lens F8, new lens F8 (dropped)",
+      "summary": "standing_drives is added to the realtime publication with no subscriber.",
+      "reason": "The plan explicitly asks for it."
+    },
+    {
+      "raised_by": "old lens F11, new lens F17 (dropped)",
+      "summary": "The runbook changes production data without rollback steps.",
+      "reason": "The migration is additive only and the runbook says how far it reaches; asking for rollback steps is a preference, not a defect."
+    },
+    {
+      "raised_by": "new lens F7, F9, F10, F11, F12, F15, F16 (all dropped)",
+      "summary": "Column default, README auto-assign wording, data-state selector, deferred question, short local names, create-or-replace restating the body, a missing group_id index.",
+      "reason": "Each is either what the plan specifies, required by Postgres, or not a defect (a data-state selector is not text; the PK already leads with a group-scoped column on a tiny table)."
+    }
+  ]
+}

@@ -1,0 +1,177 @@
+{
+  "case": "ayaniv/lens-review PR #3 at 01a7f85",
+  "note": "Union of the confirmed findings of the lens and t2a runs, each checked against change.patch. A finding matches an issue on file, new-side line range and category; `alternates` are other spots (or categories) where the same issue is equally well cited.",
+  "issues": [
+    {
+      "id": "P1",
+      "file": "skills/lens-review/scripts/merge-findings.mjs",
+      "line_range": [108, 123],
+      "category": "correctness",
+      "severity": "should",
+      "summary": "duplicationKeys folds unrelated duplication findings that share a file, or any camelCase word, into one finding."
+    },
+    {
+      "id": "P2",
+      "file": "skills/lens-review/scripts/build-pr-review.mjs",
+      "line_range": [29, 50],
+      "category": "correctness",
+      "severity": "should",
+      "summary": "locationsNote prints only file, line and duplicates per copy, so every copy's description after the first is lost on the PR."
+    },
+    {
+      "id": "P3",
+      "file": "skills/lens-review/scripts/discover-plan-docs.mjs",
+      "line_range": [12, 16],
+      "category": "correctness",
+      "severity": "should",
+      "summary": "PLAN_DOC_RE's unanchored prefixes match ordinary docs (planets.md, design-system.md, special-notes.md)."
+    },
+    {
+      "id": "P4",
+      "file": "skills/lens-review/SKILL.md",
+      "line_range": [185, 192],
+      "category": "security",
+      "severity": "should",
+      "summary": "Skeptic check 4 treats a plan doc the PR itself adds as approved, so a PR can steer the skeptic into dropping findings against it.",
+      "alternates": [{ "file": "skills/lens-review/scripts/discover-plan-docs.mjs", "line_range": [12, 20], "category": "security" }]
+    },
+    {
+      "id": "P5",
+      "file": "skills/lens-review/SKILL.md",
+      "line_range": [188, 192],
+      "category": "correctness",
+      "severity": "should",
+      "summary": "Check 4 drops a real bug in code the plan asks for: a plan requiring a behaviour does not make its implementation correct.",
+      "alternates": [{ "file": "skills/lens-review/SKILL.md", "line_range": [188, 192], "category": "security" }]
+    },
+    {
+      "id": "P6",
+      "file": "skills/lens-review/scripts/apply-skeptic.mjs",
+      "line_range": [33, 38],
+      "category": "reliability",
+      "severity": "suggestion",
+      "summary": "skeptic.json is written before the rulings are validated, leaving a valid-looking record behind when the run fails.",
+      "alternates": [{ "file": "skills/lens-review/scripts/apply-skeptic.mjs", "line_range": [33, 38], "category": "correctness" }]
+    },
+    {
+      "id": "P7",
+      "file": "skills/lens-review/scripts/merge-findings.mjs",
+      "line_range": [114, 118],
+      "category": "reliability",
+      "severity": "must",
+      "summary": "A non-string `duplicates` in a reviewer reply throws inside duplicationKeys and aborts the whole merge; malformedReason never checks it."
+    },
+    {
+      "id": "P8",
+      "file": "skills/lens-review/scripts/collect-findings.mjs",
+      "line_range": [34, 56],
+      "category": "reliability",
+      "severity": "should",
+      "summary": "collect-findings exits 0 when every reviewer failed, so the run carries on and reports a clean review."
+    },
+    {
+      "id": "P9",
+      "file": "skills/lens-review/scripts/collect-votes.mjs",
+      "line_range": [25, 27],
+      "category": "correctness",
+      "severity": "should",
+      "summary": "`voted` counts every parsed ballot, including the ones tallyChallenges then drops as malformed."
+    },
+    {
+      "id": "P10",
+      "file": "skills/lens-review/scripts/collect-votes.mjs",
+      "line_range": [13, 24],
+      "category": "duplication",
+      "severity": "should",
+      "summary": "The parse-each-reply loop (parse, write per-agent JSON, collect failures) is copied between collect-votes and collect-findings.",
+      "alternates": [{ "file": "skills/lens-review/scripts/collect-findings.mjs", "line_range": [22, 33], "category": "duplication" }]
+    },
+    {
+      "id": "P11",
+      "file": "skills/lens-review/scripts/parse-reply.mjs",
+      "line_range": [50, 62],
+      "category": "maintainability",
+      "severity": "suggestion",
+      "summary": "The --default-reviewer CLI flag is no longer used by SKILL.md (collect-findings calls parseReply directly), but it stays with its usage text and tests.",
+      "alternates": [{ "file": "skills/lens-review/scripts/parse-reply.mjs", "line_range": [6, 12], "category": "maintainability" }]
+    },
+    {
+      "id": "P12",
+      "file": "skills/lens-review/scripts/merge-findings.mjs",
+      "line_range": [175, 179],
+      "category": "maintainability",
+      "severity": "suggestion",
+      "summary": "Finding ids are assigned twice: mergeFindings numbers each one, then mergeDuplication renumbers them all.",
+      "alternates": [{ "file": "skills/lens-review/scripts/merge-findings.mjs", "line_range": [154, 157], "category": "maintainability" }]
+    },
+    {
+      "id": "P13",
+      "file": "skills/lens-review/scripts/parse-reply.mjs",
+      "line_range": [46, 48],
+      "category": "architecture",
+      "severity": "suggestion",
+      "summary": "writeJson, a generic writer used by three phase scripts, lives in parse-reply.mjs instead of beside the JSON readers in lib/cli.mjs.",
+      "alternates": [{ "file": "skills/lens-review/scripts/parse-reply.mjs", "line_range": [46, 48], "category": "maintainability" }]
+    },
+    {
+      "id": "P14",
+      "file": "skills/lens-review/team/data-steward.md",
+      "line_range": [22, 22],
+      "category": "correctness",
+      "severity": "should",
+      "summary": "The new migration-order rule is inverted: 'before none that is planned' passes a migration that sorts after a planned one, which is exactly the bug it targets.",
+      "alternates": [{ "file": "skills/lens-review/team/data-steward.md", "line_range": [22, 22], "category": "maintainability" }]
+    },
+    {
+      "id": "P15",
+      "file": "tests/lens-review-scripts.test.mjs",
+      "line_range": [1373, 1423],
+      "category": "tests",
+      "severity": "suggestion",
+      "summary": "apply-skeptic's non-array reply branch (and a reply with duplicate ids) has no test.",
+      "alternates": [{ "file": "skills/lens-review/scripts/apply-skeptic.mjs", "line_range": [16, 20], "category": "tests" }]
+    },
+    {
+      "id": "P16",
+      "file": "tests/lens-review-scripts.test.mjs",
+      "line_range": [1340, 1372],
+      "category": "tests",
+      "severity": "suggestion",
+      "summary": "collect-votes with zero stems (the skipped round SKILL.md relies on) has no test.",
+      "alternates": [{ "file": "skills/lens-review/scripts/collect-votes.mjs", "line_range": [30, 34], "category": "tests" }]
+    },
+    {
+      "id": "P17",
+      "file": "tests/lens-review-scripts.test.mjs",
+      "line_range": [446, 545],
+      "category": "tests",
+      "severity": "should",
+      "summary": "No test checks that two unrelated duplication findings sharing a file (or a duplicates target) stay apart, so the P1 over-merge passes the suite."
+    },
+    {
+      "id": "P18",
+      "file": "tests/lens-review-scripts.test.mjs",
+      "line_range": [1195, 1215],
+      "category": "tests",
+      "severity": "suggestion",
+      "summary": "The merged-duplication posting test asserts only the file:line list, and the body-only path with locations is never exercised."
+    }
+  ],
+  "left_out": [
+    {
+      "raised_by": "lens F8, F9",
+      "summary": "Mixed USD / $ notation in the cost telemetry Total line and in README.",
+      "reason": "The USD switch exists only to keep `$<digit>` out of skill text, where Claude Code reads it as an argument; `~$X.XX` is not `$<digit>`, and README is not skill text. Inconsistent, but harmless."
+    },
+    {
+      "raised_by": "t2a #7",
+      "summary": "mergeDuplication's grouping is hard to follow and its key map goes stale as groups merge.",
+      "reason": "The staleness claim does not hold: every member's keys are re-pointed to the merged group. What remains is a readability opinion."
+    },
+    {
+      "raised_by": "t2a #16",
+      "summary": "A test builds its reply with string concatenation instead of a template literal.",
+      "reason": "A formatting preference no repo rule or taste rule asks for."
+    }
+  ]
+}
