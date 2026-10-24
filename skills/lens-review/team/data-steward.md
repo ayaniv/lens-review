@@ -9,6 +9,10 @@ Scope:
 - **/repositories/**
 - **/db/**
 
+Signals:
+- \b(CREATE|ALTER|DROP) (TABLE|INDEX)\b
+- \b(createTable|dropTable|addColumn|removeColumn)\(
+
 Rules:
 - [must] A migration is reversible, or the PR explains why it cannot be.
 - [must] A migration on a large table does not take a long blocking lock (adding a non-null column with a default, building an index without a concurrent option, rewriting the table).

@@ -186,6 +186,32 @@ describe('team', () => {
     }
   })
 
+  test('every area persona ships Signals, and none fires on ordinary code', () => {
+    const ordinaryLines = ["import { useState } from 'react'", 'return null', 'const total = items.length', '}', '', 'export default App']
+    for (const fileName of Object.keys(AREA_PERSONAS)) {
+      const { signals } = parsePersona(readText(path.join(TEAM_DIR, fileName)))
+      assert.ok(signals.length > 0, `${fileName}: no Signals`)
+      for (const signal of signals) {
+        const firedOn = ordinaryLines.find(line => signal.test(line))
+        assert.equal(firedOn, undefined, `${fileName}: signal ${signal} fires on "${firedOn}"`)
+      }
+    }
+  })
+
+  test('core personas carry no Signals: they already review every PR', () => {
+    for (const fileName of Object.keys(CORE_PERSONAS)) {
+      assert.deepEqual(parsePersona(readText(path.join(TEAM_DIR, fileName))).signals, [], fileName)
+    }
+  })
+
+  test('selects the panel from the diff, not just the file list, and casting writes repo-specific Signals', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.match(skill, /scripts\/select-team\.mjs" "<TEAM_DIR>" "<RUN_DIR>\/files\.txt" "<RUN_DIR>\/diff\.patch"/)
+    const castingPrompt = readText(CASTING_PROMPT)
+    assert.match(castingPrompt, /^Signals:$/m)
+    assert.match(castingPrompt, /rewrite its Signals for this repo/)
+  })
+
   test('ships the area personas, each scoped to its area rather than the whole repo', () => {
     for (const [fileName, expectedName] of Object.entries(AREA_PERSONAS)) {
       const persona = parsePersona(readText(path.join(TEAM_DIR, fileName)))

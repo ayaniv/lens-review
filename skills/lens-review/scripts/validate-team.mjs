@@ -5,8 +5,14 @@
 //   Scope:
 //   - <glob>
 //
+//   Signals:
+//   - <regex, matched against every line the PR adds or removes, in any file>
+//
 //   Rules:
 //   - [must|should|suggestion] <rule, may wrap onto indented lines>
+//
+// Scope says where the persona's code lives; Signals say what its concern looks like, so it
+// joins a PR that touches that concern from anywhere. Either may be left out, not both.
 //
 //   node validate-team.mjs <team-dir>   → JSON summary of the team on stdout, or every
 //                                         malformed file named on stderr and a non-zero exit
@@ -16,10 +22,13 @@ import { fail, isRunDirectly } from './lib/cli.mjs'
 
 const DEFAULT_RULE_SEVERITY = 'should'
 const SEVERITY_TAG_RE = /^\[(must|should|suggestion)\]\s*/
-const SECTION_RE = /^(Scope|Rules):\s*$/
+const SECTION_RE = /^(Scope|Signals|Rules):\s*$/
+// Casting output is untrusted, and every signal runs against every changed line, so a short
+// cap keeps a crafted pattern from stalling selection on a big diff.
+const MAX_SIGNAL_LENGTH = 200
 
 function parseSections(markdown) {
-  const sections = { Scope: [], Rules: [] }
+  const sections = { Scope: [], Signals: [], Rules: [] }
   let currentItems = null
   for (const line of markdown.split('\n')) {
     const sectionMatch = line.match(SECTION_RE)
@@ -43,13 +52,27 @@ function parseRule(ruleText) {
     : { severity: DEFAULT_RULE_SEVERITY, text: ruleText }
 }
 
+function parseSignal(name, source) {
+  if (source.length > MAX_SIGNAL_LENGTH) {
+    throw new Error(`${name}: signal "${source.slice(0, 40)}…" is longer than ${MAX_SIGNAL_LENGTH} characters`)
+  }
+  let signal
+  try {
+    signal = new RegExp(source)
+  } catch (error) {
+    throw new Error(`${name}: signal "${source}" is not a valid regex (${error.message})`)
+  }
+  if (signal.test('')) throw new Error(`${name}: signal "${source}" matches an empty line, so it would match every PR`)
+  return signal
+}
+
 export function parsePersona(markdown) {
   const name = markdown.match(/^# (.+)$/m)?.[1].trim()
   if (!name) throw new Error('no "# <Name>" heading')
-  const { Scope: scope, Rules: ruleTexts } = parseSections(markdown)
-  if (scope.length === 0) throw new Error(`${name}: no Scope globs`)
+  const { Scope: scope, Signals: signalSources, Rules: ruleTexts } = parseSections(markdown)
+  if (scope.length === 0 && signalSources.length === 0) throw new Error(`${name}: no Scope globs or Signals`)
   if (ruleTexts.length === 0) throw new Error(`${name}: no Rules`)
-  return { name, scope, rules: ruleTexts.map(parseRule) }
+  return { name, scope, signals: signalSources.map(source => parseSignal(name, source)), rules: ruleTexts.map(parseRule) }
 }
 
 export function isCorePersona(persona) {
@@ -91,7 +114,8 @@ if (isRunDirectly(import.meta.url)) {
   if (!teamDir) fail('usage: validate-team.mjs <team-dir>')
   try {
     const team = loadTeam(teamDir)
-    console.log(JSON.stringify(team.map(({ file, name, scope }) => ({ file, name, scope })), null, 2))
+    const summary = team.map(({ file, name, scope, signals }) => ({ file, name, scope, signals: signals.map(signal => signal.source) }))
+    console.log(JSON.stringify(summary, null, 2))
   } catch (error) {
     fail(error.message)
   }

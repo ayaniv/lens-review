@@ -13,6 +13,7 @@ const SELECT_TEAM = path.join(SCRIPTS_DIR, 'select-team.mjs')
 const SAVE_CAST = path.join(SCRIPTS_DIR, 'save-cast.mjs')
 const PARSE_REPLY = path.join(SCRIPTS_DIR, 'parse-reply.mjs')
 const BUILD_PR_REVIEW = path.join(SCRIPTS_DIR, 'build-pr-review.mjs')
+const DIFF_LIB = path.join(SCRIPTS_DIR, 'lib', 'diff.mjs')
 
 // The developer's own example of a project persona, verbatim.
 const DESIGN_SYSTEM_GUARDIAN = `# Design System Guardian
@@ -52,6 +53,30 @@ Rules:
 - [must] Every new endpoint checks the caller's authorization.
 - Do not flag frontend code.
 `
+
+// A cast Guardian: casting narrowed its Scope to where this repo's design system lives, and its
+// Signals describe what touching that design system looks like anywhere else in the repo.
+function castGuardian(designSystemGlob) {
+  return `# The Design System Guardian
+
+Scope:
+- ${designSystemGlob}
+
+Signals:
+- from ['"]@acme/ui['"]
+- <(Button|Card)\\b[^>]*\\bstyle=
+
+Rules:
+- [must] Consuming apps do not override design-system component styles.
+- Do not flag backend code.
+`
+}
+
+// One diff file section; `lines` are raw hunk lines, each starting with '+', '-' or ' '.
+function diffSection(file, lines, { isDeleted = false } = {}) {
+  const header = isDeleted ? `--- a/${file}\n+++ /dev/null` : `--- a/${file}\n+++ b/${file}`
+  return `diff --git a/${file} b/${file}\n${header}\n@@ -1,${lines.length} +1,${lines.length} @@\n${lines.join('\n')}\n`
+}
 
 const INFRA_REVIEWER = `# The Infra Reviewer
 
@@ -509,8 +534,49 @@ describe('validate-team.mjs', () => {
     assert.equal(rules[0].text, 'Shared modules do not import feature code.')
   })
 
-  test('rejects a persona with no scope', () => {
-    assert.throws(() => parsePersona('# Lonely\n\nRules:\n- Flag things.\n'), /scope/i)
+  test('rejects a persona with neither a Scope nor Signals: nothing could ever bring it onto a panel', () => {
+    assert.throws(() => parsePersona('# Lonely\n\nRules:\n- Flag things.\n'), /no Scope globs or Signals/)
+  })
+
+  test('reads Signals as regexes over changed lines, alongside the Scope', () => {
+    const persona = parsePersona(castGuardian('packages/ui/**'))
+    assert.deepEqual(persona.scope, ['packages/ui/**'])
+    assert.equal(persona.signals.length, 2)
+    assert.ok(persona.signals[1].test('<Button size="sm" style={{ color: "red" }}>'))
+  })
+
+  test('a persona written before Signals existed still parses, with no signals', () => {
+    assert.deepEqual(parsePersona(BACKEND_REVIEWER).signals, [])
+  })
+
+  test('accepts a Signals-only persona: its concern, not its location, brings it in', () => {
+    const persona = parsePersona('# The Accessibility Reviewer\n\nSignals:\n- \\baria-\n\nRules:\n- Flag missing labels.\n')
+    assert.deepEqual(persona.scope, [])
+    assert.equal(persona.signals.length, 1)
+  })
+
+  test('rejects a signal that is not a valid regex, naming it', () => {
+    assert.throws(
+      () => parsePersona('# Broken\n\nSignals:\n- style=(\n\nRules:\n- Flag things.\n'),
+      /Broken: signal "style=\(" is not a valid regex/,
+    )
+  })
+
+  test('rejects a signal that matches every line, since it would put the persona on every PR', () => {
+    for (const matchesAnything of ['x?', '.*', '^']) {
+      assert.throws(
+        () => parsePersona(`# Greedy\n\nSignals:\n- ${matchesAnything}\n\nRules:\n- Flag things.\n`),
+        /matches an empty line/,
+      )
+    }
+  })
+
+  test('rejects an overlong signal, which casting output could use to stall selection', () => {
+    const overlong = `a${'b?'.repeat(150)}`
+    assert.throws(
+      () => parsePersona(`# Long\n\nSignals:\n- ${overlong}\n\nRules:\n- Flag things.\n`),
+      /longer than 200 characters/,
+    )
   })
 
   test('rejects a persona with no rules', () => {
@@ -688,19 +754,160 @@ describe('select-team.mjs', () => {
     writeFiles(teamDir, { 'architect.md': ARCHITECT, 'backend.md': BACKEND_REVIEWER })
     const filesList = path.join(makeTempDir('run'), 'files.txt')
     fs.writeFileSync(filesList, 'services/a.ts\nREADME.md\n')
-    const result = runScript('node', [SELECT_TEAM, teamDir, filesList])
+    const diffPath = path.join(path.dirname(filesList), 'diff.patch')
+    fs.writeFileSync(diffPath, diffSection('services/a.ts', ['+x']) + diffSection('README.md', ['+y']))
+    const result = runScript('node', [SELECT_TEAM, teamDir, filesList, diffPath])
     assert.equal(result.status, 0, result.stderr)
     const { panel, uncoveredFiles } = JSON.parse(result.stdout)
     assert.equal(panel, 'Panel: core ×1 + The Backend Reviewer (services/a.ts)')
     assert.deepEqual(uncoveredFiles, ['README.md'])
   })
 
+  test('CLI fails with usage when the diff argument is missing', () => {
+    const result = runScript('node', [SELECT_TEAM, makeTempDir('team'), '/tmp/files.txt'])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /usage: select-team\.mjs <team-dir> <files\.txt> <diff\.patch>/)
+  })
+
   test('CLI exits non-zero and names the changed-files list when it is missing', () => {
     const teamDir = makeTempDir('team')
     writeFiles(teamDir, { 'architect.md': ARCHITECT })
-    const result = runScript('node', [SELECT_TEAM, teamDir, '/nonexistent/files.txt'])
+    const diffPath = path.join(makeTempDir('run'), 'diff.patch')
+    fs.writeFileSync(diffPath, '')
+    const result = runScript('node', [SELECT_TEAM, teamDir, '/nonexistent/files.txt', diffPath])
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /files\.txt/)
+  })
+})
+
+describe('select-team.mjs: Signals', () => {
+  let selectTeam
+  let parsePersona
+  let parseChangedLines
+
+  beforeEach(async () => {
+    ;({ selectTeam } = await import(SELECT_TEAM))
+    ;({ parsePersona } = await import(VALIDATE_TEAM))
+    ;({ parseChangedLines } = await import(DIFF_LIB))
+  })
+
+  function selectFor(personaFiles, patchText) {
+    const team = personaFiles.map(markdown => parsePersona(markdown))
+    const changedLines = parseChangedLines(patchText)
+    return selectTeam(team, [...changedLines.keys()], changedLines)
+  }
+
+  function guardianOf({ selected }) {
+    return selected.find(persona => persona.name === 'The Design System Guardian')
+  }
+
+  const STYLE_OVERRIDE = '+  return <Button style={{ background: "red" }}>Pay</Button>'
+
+  test('cross-boundary: an app overriding a design-system component brings the Guardian in, outside its Scope', () => {
+    const selection = selectFor(
+      [ARCHITECT, castGuardian('packages/ui/**')],
+      diffSection('apps/web/src/Checkout.tsx', [STYLE_OVERRIDE]),
+    )
+    assert.deepEqual(guardianOf(selection)?.matchedBy, ['apps/web/src/Checkout.tsx'])
+    assert.deepEqual(selection.uncoveredFiles, [])
+  })
+
+  test('direct: a change inside the design system still brings the Guardian in through its Scope', () => {
+    const selection = selectFor(
+      [ARCHITECT, castGuardian('packages/ui/**')],
+      diffSection('packages/ui/src/Button.tsx', ['+  const padding = 8']),
+    )
+    assert.deepEqual(guardianOf(selection)?.matchedBy, ['packages/ui/src/Button.tsx'])
+  })
+
+  test('unrelated: a PR that neither touches the design system nor uses it leaves the Guardian out', () => {
+    const selection = selectFor(
+      [ARCHITECT, castGuardian('packages/ui/**')],
+      diffSection('services/billing/invoice.ts', ['+  const total = items.reduce(sum, 0)']),
+    )
+    assert.equal(guardianOf(selection), undefined)
+    assert.deepEqual(selection.selected.map(persona => persona.name), ['The Architect'])
+  })
+
+  test('different layouts: the same Signals catch the override wherever the design system lives', () => {
+    for (const designSystemGlob of ['packages/ui/**', 'libs/components/**', 'src/shared/ds/**']) {
+      const selection = selectFor(
+        [ARCHITECT, castGuardian(designSystemGlob)],
+        diffSection('web/pages/checkout.tsx', [STYLE_OVERRIDE]),
+      )
+      assert.deepEqual(guardianOf(selection)?.matchedBy, ['web/pages/checkout.tsx'], designSystemGlob)
+    }
+  })
+
+  test('a newly added import of the design system counts as touching it', () => {
+    const selection = selectFor(
+      [ARCHITECT, castGuardian('packages/ui/**')],
+      diffSection('apps/admin/Table.tsx', ["+import { Card } from '@acme/ui'"]),
+    )
+    assert.deepEqual(guardianOf(selection)?.matchedBy, ['apps/admin/Table.tsx'])
+  })
+
+  test('only changed lines count: an untouched import in the surrounding context does not', () => {
+    const selection = selectFor(
+      [ARCHITECT, castGuardian('packages/ui/**')],
+      diffSection('apps/web/src/Checkout.tsx', [" import { Button } from '@acme/ui'", '+  const total = 3']),
+    )
+    assert.equal(guardianOf(selection), undefined)
+  })
+
+  test('a removed line counts too, so taking an override out still gets reviewed', () => {
+    const selection = selectFor(
+      [ARCHITECT, castGuardian('packages/ui/**')],
+      diffSection('apps/web/src/Checkout.tsx', ['-  return <Button style={{ background: "red" }}>Pay</Button>']),
+    )
+    assert.deepEqual(guardianOf(selection)?.matchedBy, ['apps/web/src/Checkout.tsx'])
+  })
+
+  test('a deleted file is matched under its old path', () => {
+    const selection = selectFor(
+      [ARCHITECT, castGuardian('packages/ui/**')],
+      diffSection('apps/web/src/Old.tsx', [STYLE_OVERRIDE.replace('+', '-')], { isDeleted: true }),
+    )
+    assert.deepEqual(guardianOf(selection)?.matchedBy, ['apps/web/src/Old.tsx'])
+  })
+
+  test('legacy: a persona with no Signals is selected by its Scope alone, exactly as before', () => {
+    const selection = selectFor(
+      [ARCHITECT, BACKEND_REVIEWER],
+      diffSection('apps/web/src/Checkout.tsx', ['+  // services/billing is called from here']) +
+        diffSection('services/a.ts', ['+  const x = 1']),
+    )
+    const backend = selection.selected.find(persona => persona.name === 'The Backend Reviewer')
+    assert.deepEqual(backend.matchedBy, ['services/a.ts'])
+  })
+
+  test('lists each file once even when both its path and its lines match', () => {
+    const selection = selectFor(
+      [ARCHITECT, castGuardian('apps/**')],
+      diffSection('apps/web/src/Checkout.tsx', [STYLE_OVERRIDE, STYLE_OVERRIDE]),
+    )
+    assert.deepEqual(guardianOf(selection)?.matchedBy, ['apps/web/src/Checkout.tsx'])
+  })
+
+  test('CLI reads the diff and selects by Signals', () => {
+    const teamDir = makeTempDir('team')
+    writeFiles(teamDir, { 'architect.md': ARCHITECT, 'design-system-guardian.md': castGuardian('packages/ui/**') })
+    const runDir = makeTempDir('run')
+    fs.writeFileSync(path.join(runDir, 'files.txt'), 'apps/web/src/Checkout.tsx\n')
+    fs.writeFileSync(path.join(runDir, 'diff.patch'), diffSection('apps/web/src/Checkout.tsx', [STYLE_OVERRIDE]))
+    const result = runScript('node', [SELECT_TEAM, teamDir, path.join(runDir, 'files.txt'), path.join(runDir, 'diff.patch')])
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).panel, 'Panel: core ×1 + The Design System Guardian (apps/web/src/Checkout.tsx)')
+  })
+
+  test('CLI fails naming the diff when it cannot be read, rather than silently ignoring Signals', () => {
+    const teamDir = makeTempDir('team')
+    writeFiles(teamDir, { 'architect.md': ARCHITECT })
+    const filesList = path.join(makeTempDir('run'), 'files.txt')
+    fs.writeFileSync(filesList, 'a.ts\n')
+    const result = runScript('node', [SELECT_TEAM, teamDir, filesList, '/nonexistent/diff.patch'])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /diff\.patch/)
   })
 })
 

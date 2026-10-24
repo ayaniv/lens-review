@@ -1,6 +1,6 @@
 # lens-review
 
-A [Claude Code](https://claude.com/claude-code) skill that reviews a branch or PR with a synthetic team of reviewer personas, so it needs no PR-comment history. The first time you run it in a repo, it casts a team from the repo's layout and its own AGENTS.md / CLAUDE.md / Cursor / Copilot rules, and saves that team for later runs. On each review it picks the panel from what the PR changes. Five core personas (Architect, Maintainer, Reliability Engineer, Domain Expert, Reuse Scout) review every PR. The backend, design-system, data and infra personas join only when their files change. The personas then challenge each other's findings, and an Opus skeptic decides which findings make the final report.
+A [Claude Code](https://claude.com/claude-code) skill that reviews a branch or PR with a synthetic team of reviewer personas, so it needs no PR-comment history. The first time you run it in a repo, it casts a team from the repo's layout and its own AGENTS.md / CLAUDE.md / Cursor / Copilot rules, and saves that team for later runs. On each review it picks the panel from what the PR changes. Five core personas (Architect, Maintainer, Reliability Engineer, Domain Expert, Reuse Scout) review every PR. The backend, design-system, data and infra personas join only when the PR touches their concern: a changed file is in their area, or a changed line anywhere looks like their concern (for example, an app overriding a design-system component's style). The personas then challenge each other's findings, and an Opus skeptic decides which findings make the final report.
 
 ## Install
 
@@ -50,6 +50,10 @@ Scope:
 - **/payments/**
 - **/billing/**
 
+Signals:
+- \bchargeCard\(
+- from ['"]@acme/payments['"]
+
 Rules:
 - [must] Every amount is an integer number of minor units, never a float.
 - [should] A retried charge is idempotent.
@@ -57,7 +61,8 @@ Rules:
 ```
 
 - `# Name`: the persona's display name.
-- `Scope:`: glob patterns. A persona whose scope is `**` reviews every PR (core). Any other scope joins the panel only when a changed file matches it.
+- `Scope:`: glob patterns for **where** the persona's code lives. A persona whose scope is `**` reviews every PR (core). Any other persona joins the panel when a changed file matches its Scope.
+- `Signals:` (optional): regexes for **what** the persona's concern looks like. Each is tested against every line the PR adds or removes, in any file, and a match also brings the persona onto the panel. That's how the Payments Reviewer above joins a PR that calls `chargeCard(` from a checkout page outside `payments/`. Signals are case-sensitive JavaScript regexes, at most 200 characters, and may not match an empty line. Keep them specific: a signal that matches ordinary code puts its persona, and its cost, on every PR. Casting writes them from the repo's real names (its design-system package, its ORM calls). A persona needs a Scope, Signals, or both. Files written before Signals existed keep working unchanged.
 - `Rules:`: each one starts with `[must]`, `[should]` or `[suggestion]`. A rule with no tag counts as `[should]`, and a long rule can wrap onto indented lines.
 
 The base personas the casting step starts from are in [`skills/lens-review/team/`](skills/lens-review/team/). The generic review checklist is [`skills/lens-review/checklist.md`](skills/lens-review/checklist.md).
