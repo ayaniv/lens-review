@@ -150,7 +150,7 @@ node "<SKILL_DIR>/scripts/apply-skeptic.mjs" "<RUN_DIR>"
 node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" skeptic end
 node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" --summary
 ```
-`scripts/apply-skeptic.mjs` writes `skeptic.json` and `final-findings.json` (every finding the skeptic kept, unchanged, plus its `skeptic: {verdict, reason}`), and prints `{kept, dropped}`. When the reply is missing or not JSON, or leaves **any** finding id from `tallied.json` without a keep/drop verdict, it exits non-zero naming the ids: **stop** and show that. A finding the skeptic never ruled on would otherwise vanish from the report without a trace. Never print the unfiltered findings as the final review. When `tallied.json` is `[]`, skip the skeptic and run the script anyway: it writes an empty `final-findings.json`.
+`scripts/apply-skeptic.mjs` writes `skeptic.json` and `final-findings.json` (every finding the skeptic kept, unchanged, plus its `skeptic: {verdict, reason}`), and prints `{kept, dropped}`. When the reply is missing or not JSON, it exits non-zero: **stop** and show that. When the reply leaves **any** finding id from `tallied.json` without a keep/drop verdict, it exits non-zero naming the ids: `SendMessage` the same skeptic once, `Your reply has no verdict for <ids>. Rewrite <RUN_DIR>/reply-skeptic.txt with a verdict for every finding, then reply done.`, and run `scripts/apply-skeptic.mjs` again. If it still leaves one unruled, **stop** and show the ids. A finding the skeptic never ruled on would otherwise vanish from the report without a trace. Never print the unfiltered findings as the final review. When `tallied.json` is `[]`, skip the skeptic and run the script anyway: it writes an empty `final-findings.json`.
 
 ---
 

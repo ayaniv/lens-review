@@ -206,6 +206,14 @@ describe('skill layout', () => {
     assert.doesNotMatch(skill, /final-findings\.json` with `Write`/, 'final-findings.json must come from a script')
   })
 
+  // A live carpool run lost its whole review to a skeptic that skipped 2 of 23 ids.
+  test('asks the skeptic once for the ids it left unruled before stopping', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const skepticStep = skill.slice(skill.indexOf('## Step 4'), skill.indexOf('## Step 5'))
+    assert.match(skepticStep, /`SendMessage` the same skeptic once/)
+    assert.match(skepticStep, /If it still leaves one unruled, \*\*stop\*\*/)
+  })
+
   test("the skeptic rules on each finding's own merits and never drops one for repeating another", () => {
     assert.match(readText(SKEPTIC_PROMPT), /Never drop a finding because another finding repeats it/)
   })
