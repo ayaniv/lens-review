@@ -443,6 +443,103 @@ describe('merge-findings.mjs', () => {
   })
 })
 
+describe('merge-findings.mjs: duplication across copies', () => {
+  // Modelled on a real run: three e2e specs each re-declare helpers that an existing spec
+  // already has, and a migration copies an older function body. Two reviewers flagged every
+  // copy separately, which put seven near-identical comments on the PR.
+  const SPECS_DIFF = [
+    diffSection('e2e/second-parent.spec.ts', Array(80).fill('+x')),
+    diffSection('e2e/names-and-seats.spec.ts', Array(120).fill('+x')),
+    diffSection('e2e/standing-drives.spec.ts', Array(80).fill('+x')),
+    diffSection('supabase/migrations/2_drives.sql', Array(60).fill('+x')),
+  ].join('')
+  const copyFindings = {
+    generic: [
+      duplication('e2e/second-parent.spec.ts', 21, 'childButton and enterAs are redefined here and in two other specs.', { reviewer: 'Generic' }),
+      duplication('e2e/names-and-seats.spec.ts', 88, 'addFamily repeats the join_group call second-parent.spec.ts writes inline.', { reviewer: 'Generic', severity: 'suggestion' }),
+    ],
+    reuseScout: [
+      duplication('e2e/second-parent.spec.ts', 21, 'childButton and enterAs copy the invite helpers.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
+      duplication('supabase/migrations/2_drives.sql', 31, 'ensure_practices re-defines the init body.', { duplicates: 'supabase/migrations/1_init.sql:377', severity: 'must' }),
+      duplication('e2e/names-and-seats.spec.ts', 94, 'childButton is defined again with the same selector.', { duplicates: 'e2e/invite-link-access.spec.ts:27' }),
+      duplication('e2e/second-parent.spec.ts', 16, 'childButton is a third copy of the pick-child selector.', { duplicates: 'e2e/invite-link-access.spec.ts:27' }),
+      duplication('e2e/names-and-seats.spec.ts', 98, 'enterAs repeats the open-invite steps.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
+      duplication('e2e/standing-drives.spec.ts', 60, 'enterAs is a third copy of the open-invite steps.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
+      duplication('e2e/second-parent.spec.ts', 55, 'The inline join_group call repeats the addFamily helper.', { duplicates: 'e2e/names-and-seats.spec.ts:83' }),
+    ],
+  }
+  let mergeFindings
+  let specsDiffLines
+
+  function duplication(file, line, description, overrides = {}) {
+    return finding({ file, line, category: 'duplication', description, reviewer: 'The Reuse Scout', ...overrides })
+  }
+
+  beforeEach(async () => {
+    let parseDiffLines
+    ;({ mergeFindings, parseDiffLines } = await import(MERGE_FINDINGS))
+    specsDiffLines = parseDiffLines(SPECS_DIFF)
+  })
+
+  test('folds every copy of the duplicated helpers into one finding that lists each location', () => {
+    const { findings, dropped } = mergeFindings([copyFindings.generic, copyFindings.reuseScout], specsDiffLines)
+    assert.deepEqual(dropped, [])
+    const specCopies = findings.filter(merged => merged.file.startsWith('e2e/'))
+    assert.equal(specCopies.length, 1)
+    const [helpers] = specCopies
+    assert.deepEqual(
+      helpers.locations.map(({ file, line }) => `${file}:${line}`),
+      [
+        'e2e/second-parent.spec.ts:21',
+        'e2e/names-and-seats.spec.ts:88',
+        'e2e/names-and-seats.spec.ts:94',
+        'e2e/second-parent.spec.ts:16',
+        'e2e/names-and-seats.spec.ts:98',
+        'e2e/standing-drives.spec.ts:60',
+        'e2e/second-parent.spec.ts:55',
+      ],
+    )
+    assert.deepEqual(helpers.reviewers, ['Generic', 'The Reuse Scout'])
+    assert.equal(helpers.severity, 'should')
+    assert.equal(helpers.duplicates, 'e2e/invite-link-access.spec.ts:36')
+  })
+
+  test('keeps a duplication that shares no file and no helper with the others as its own finding', () => {
+    const { findings } = mergeFindings([copyFindings.generic, copyFindings.reuseScout], specsDiffLines)
+    const migrationCopy = findings.find(merged => merged.file === 'supabase/migrations/2_drives.sql')
+    assert.equal(migrationCopy.severity, 'must')
+    assert.equal(migrationCopy.locations, undefined)
+    assert.deepEqual(findings.map(merged => merged.id), ['F1', 'F2'])
+  })
+
+  test('links copies through a helper they both name, even in files nothing else shares', () => {
+    const { findings } = mergeFindings(
+      [
+        [
+          duplication('e2e/second-parent.spec.ts', 10, 'formatSeat repeats the seat label logic.'),
+          duplication('e2e/standing-drives.spec.ts', 10, 'A second formatSeat copy.'),
+        ],
+      ],
+      specsDiffLines,
+    )
+    assert.equal(findings.length, 1)
+    assert.equal(findings[0].locations.length, 2)
+  })
+
+  test('never folds findings of another category, even when they name the same helper', () => {
+    const { findings } = mergeFindings(
+      [
+        [
+          duplication('e2e/second-parent.spec.ts', 10, 'formatSeat repeats the seat label logic.'),
+          finding({ file: 'e2e/standing-drives.spec.ts', line: 10, category: 'correctness', description: 'formatSeat drops the last seat.' }),
+        ],
+      ],
+      specsDiffLines,
+    )
+    assert.equal(findings.length, 2)
+  })
+})
+
 describe('discover-rule-sources.mjs', () => {
   let discoverRuleSources
   let repoDir
@@ -975,11 +1072,11 @@ describe('parse-reply.mjs', () => {
     replyDir = makeTempDir('agent-reply')
   })
 
-  function parseReply(replyText) {
+  function parseReply(replyText, flags = []) {
     const replyPath = path.join(replyDir, 'reply.txt')
     const outPath = path.join(replyDir, 'findings.json')
     fs.writeFileSync(replyPath, replyText)
-    const result = runScript('node', [PARSE_REPLY, replyPath, outPath])
+    const result = runScript('node', [PARSE_REPLY, replyPath, outPath, ...flags])
     return { result, outPath }
   }
 
@@ -995,6 +1092,31 @@ describe('parse-reply.mjs', () => {
       assert.equal(result.status, 0, result.stderr)
       assert.ok(JSON.parse(fs.readFileSync(outPath, 'utf8')))
     }
+  })
+
+  test('--default-reviewer credits a finding with no reviewer to the agent that wrote the reply', () => {
+    // The Maintainer's reply in the carpool #13 run: valid findings, no `reviewer` on any of them.
+    const reply = JSON.stringify([
+      { file: 'README.md', line: 188, severity: 'should', category: 'maintainability', description: 'The runbook misdescribes the seed refusal.' },
+      { file: 'e2e/a.spec.ts', line: 160, severity: 'suggestion', category: 'maintainability', description: 'Misleading name.', reviewer: 'The Architect' },
+    ])
+    const { result, outPath } = parseReply(reply, ['--default-reviewer', 'The Maintainer'])
+    assert.equal(result.status, 0, result.stderr)
+    const findings = JSON.parse(fs.readFileSync(outPath, 'utf8'))
+    assert.deepEqual(findings.map(written => written.reviewer), ['The Maintainer', 'The Architect'])
+  })
+
+  test('--default-reviewer refuses a reply that is not a findings array, so the agent counts as failed', () => {
+    const { result, outPath } = parseReply('{"persona": "X", "votes": []}', ['--default-reviewer', 'The Maintainer'])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /reply\.txt is not a JSON array of findings/)
+    assert.ok(!fs.existsSync(outPath))
+  })
+
+  test('--default-reviewer without a name fails with usage', () => {
+    const { result } = parseReply('[]', ['--default-reviewer'])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /needs a name/)
   })
 
   test('fails loudly, naming the reply, and writes nothing when the reply is not JSON', () => {
@@ -1073,6 +1195,21 @@ describe('build-pr-review.mjs', () => {
     assert.match(review.comments[0].body, /Duplicates `src\/utils\/money\.ts:4`/)
   })
 
+  test('posts a merged duplication once, listing every copy it stands for', () => {
+    const locations = [
+      { file: 'src/api.ts', line: 10, duplicates: 'src/utils/money.ts:4', description: 'formatMoney copy' },
+      { file: 'src/components/Checkout.tsx', line: 3, description: 'Another formatMoney copy' },
+    ]
+    const review = buildPrReview({
+      findings: [finalFinding({ category: 'duplication', duplicates: 'src/utils/money.ts:4', locations })],
+      diffLines,
+      summary: SUMMARY,
+      commitId: HEAD_SHA,
+    })
+    assert.equal(review.comments.length, 1)
+    assert.match(review.comments[0].body, /Every copy:\n- `src\/api\.ts:10` \(duplicates `src\/utils\/money\.ts:4`\)\n- `src\/components\/Checkout\.tsx:3`/)
+  })
+
   test('keeps reviewer names off the PR', () => {
     const review = buildPrReview({ findings: [finalFinding({ reviewer: 'The Reuse Scout' })], diffLines, summary: SUMMARY, commitId: HEAD_SHA })
     assert.doesNotMatch(JSON.stringify(review), /Reuse Scout/)
@@ -1141,5 +1278,192 @@ describe('build-pr-review.mjs', () => {
     ])
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /missing\.md/)
+  })
+})
+
+describe('collect-findings.mjs', () => {
+  const COLLECT_FINDINGS = path.join(SCRIPTS_DIR, 'collect-findings.mjs')
+  let runDir
+
+  beforeEach(() => {
+    runDir = makeTempDir('collect-findings')
+    fs.writeFileSync(path.join(runDir, 'diff.patch'), DIFF_PATCH)
+  })
+
+  function collect(...agentArgs) {
+    return runScript('node', [COLLECT_FINDINGS, runDir, ...agentArgs])
+  }
+
+  test('parses every reply, credits a finding with no reviewer to its agent, and merges them in one call', () => {
+    const { reviewer, ...withoutReviewer } = finding({ line: 40 })
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
+    fs.writeFileSync(path.join(runDir, 'reply-maintainer.txt'), '```json\n' + JSON.stringify([withoutReviewer]) + '\n```')
+    const result = collect('anthropic=Anthropic', 'maintainer=The Maintainer')
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), { failedReviewers: [], droppedFindings: 0, findings: 2 })
+    const merged = JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8'))
+    assert.deepEqual(merged.map(written => written.reviewers), [['Anthropic'], ['The Maintainer']])
+    assert.ok(fs.existsSync(path.join(runDir, 'findings-maintainer.json')))
+  })
+
+  test('lists a reviewer whose reply is missing or not a findings array as failed, and merges the rest', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
+    fs.writeFileSync(path.join(runDir, 'reply-architect.txt'), 'I found no issues.')
+    const result = collect('anthropic=Anthropic', 'architect=The Architect', 'reuse-scout=The Reuse Scout')
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).failedReviewers, ['The Architect', 'The Reuse Scout'])
+    assert.match(result.stderr, /failed reviewer: .*reply-reuse-scout\.txt/)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8')).length, 1)
+  })
+
+  test('still drops a finding outside the diff, and counts it', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ file: 'src/untouched.ts' })]))
+    const result = collect('anthropic=Anthropic')
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).droppedFindings, 1)
+  })
+
+  test('fails with usage on an agent argument that is not <stem>=<reviewer>', () => {
+    const result = collect('anthropic')
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /"anthropic" is not <stem>=<reviewer name>/)
+  })
+
+  test('fails naming the diff when the run dir has none', () => {
+    fs.rmSync(path.join(runDir, 'diff.patch'))
+    const result = collect('anthropic=Anthropic')
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /diff\.patch/)
+  })
+})
+
+describe('collect-votes.mjs', () => {
+  const COLLECT_VOTES = path.join(SCRIPTS_DIR, 'collect-votes.mjs')
+  let runDir
+
+  beforeEach(() => {
+    runDir = makeTempDir('collect-votes')
+    const { reviewer, ...issue } = finding({})
+    fs.writeFileSync(path.join(runDir, 'merged.json'), JSON.stringify([{ id: 'F1', ...issue, reviewers: [reviewer] }]))
+  })
+
+  test('parses every ballot and tallies them into tallied.json in one call', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-votes-architect.txt'), JSON.stringify({ persona: 'The Architect', votes: [{ id: 'F1', verdict: 'dispute', reason: 'Awaited upstream' }] }))
+    const result = runScript('node', [COLLECT_VOTES, runDir, 'architect'])
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), { voted: 1, failedVoters: [], contested: 1, droppedVotes: 0 })
+    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'tallied.json'), 'utf8'))[0].contested, true)
+  })
+
+  test('counts a persona with no ballot file as a failed voter and tallies the rest', () => {
+    const result = runScript('node', [COLLECT_VOTES, runDir, 'architect'])
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).failedVoters, ['architect'])
+    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'tallied.json'), 'utf8'))[0].contested, false)
+  })
+
+  test('fails naming merged.json when it is missing', () => {
+    fs.rmSync(path.join(runDir, 'merged.json'))
+    const result = runScript('node', [COLLECT_VOTES, runDir])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /merged\.json/)
+  })
+})
+
+describe('apply-skeptic.mjs', () => {
+  const APPLY_SKEPTIC = path.join(SCRIPTS_DIR, 'apply-skeptic.mjs')
+  let runDir
+
+  beforeEach(() => {
+    runDir = makeTempDir('apply-skeptic')
+    const { reviewer, ...issue } = finding({})
+    const tallied = ['F1', 'F2'].map(id => ({ id, ...issue, reviewers: [reviewer], challenge: { agree: [], dispute: [] }, contested: false }))
+    fs.writeFileSync(path.join(runDir, 'tallied.json'), JSON.stringify(tallied))
+  })
+
+  function applySkeptic(reply) {
+    if (reply !== undefined) fs.writeFileSync(path.join(runDir, 'reply-skeptic.txt'), reply)
+    return runScript('node', [APPLY_SKEPTIC, runDir])
+  }
+
+  test('keeps only the findings the skeptic kept, unchanged, with its ruling attached', () => {
+    const result = applySkeptic(JSON.stringify([
+      { id: 'F1', verdict: 'keep', reason: 'Line 10 drops the promise.' },
+      { id: 'F2', verdict: 'drop', reason: 'Awaited by the caller.' },
+    ]))
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), { kept: 1, dropped: 1 })
+    const [kept, ...rest] = JSON.parse(fs.readFileSync(path.join(runDir, 'final-findings.json'), 'utf8'))
+    assert.deepEqual(rest, [])
+    assert.equal(kept.id, 'F1')
+    assert.deepEqual(kept.skeptic, { verdict: 'keep', reason: 'Line 10 drops the promise.' })
+    assert.deepEqual(kept.challenge, { agree: [], dispute: [] })
+  })
+
+  test('fails naming every id the skeptic did not rule on, and writes no final findings', () => {
+    const result = applySkeptic(JSON.stringify([{ id: 'F1', verdict: 'maybe', reason: '?' }]))
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /no keep\/drop verdict for F1, F2/)
+    assert.ok(!fs.existsSync(path.join(runDir, 'final-findings.json')))
+  })
+
+  test('fails naming the reply when the skeptic wrote none', () => {
+    const result = applySkeptic()
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /reply-skeptic\.txt/)
+  })
+
+  test('with no findings to rule on, writes an empty review without needing a skeptic reply', () => {
+    fs.writeFileSync(path.join(runDir, 'tallied.json'), '[]')
+    const result = applySkeptic()
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runDir, 'final-findings.json'), 'utf8')), [])
+  })
+})
+
+describe('discover-plan-docs.mjs', () => {
+  const DISCOVER_PLAN_DOCS = path.join(SCRIPTS_DIR, 'discover-plan-docs.mjs')
+  let inputDir
+  let filesPath
+
+  beforeEach(() => {
+    inputDir = makeTempDir('plan-docs')
+    filesPath = path.join(inputDir, 'files.txt')
+    fs.writeFileSync(
+      filesPath,
+      ['docs/tech-design-names-parents-seats.md', 'supabase/migrations/20261024000001_standing_drives.sql', 'README.md', 'src/plan.ts', 'tasks/x/INTENT.md'].join('\n'),
+    )
+  })
+
+  test('finds the plan and intent docs the PR changes, and nothing else', () => {
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+  })
+
+  test('puts a plan the caller passes first, and lists each path once', () => {
+    const passedPlan = path.join(inputDir, 'tech-design.md')
+    fs.writeFileSync(passedPlan, '# Plan\n')
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', passedPlan, '--plan', passedPlan])
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), [passedPlan, 'docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+  })
+
+  test('returns [] for a PR that changes no plan doc', () => {
+    fs.writeFileSync(filesPath, 'src/a.ts\n')
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
+    assert.deepEqual(JSON.parse(result.stdout), [])
+  })
+
+  test('fails naming a passed plan that does not exist, rather than reviewing without it', () => {
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', '/nonexistent/tech-design.md'])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /plan doc not found: \/nonexistent\/tech-design\.md/)
+  })
+
+  test('fails with usage when --files is missing', () => {
+    const result = runScript('node', [DISCOVER_PLAN_DOCS])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /usage: discover-plan-docs\.mjs/)
   })
 })

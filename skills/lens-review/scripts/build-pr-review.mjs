@@ -26,16 +26,26 @@ function duplicatesNote(finding) {
   return finding.duplicates ? ` Duplicates \`${finding.duplicates}\`.` : ''
 }
 
+// A merged duplication finding is posted once, so its comment names every copy it stands for.
+function locationsNote(finding, { separator, indent }) {
+  if (!finding.locations) return ''
+  const copies = finding.locations.map(({ file, line, duplicates }) =>
+    `${indent}- \`${file}:${line}\`${duplicates ? ` (duplicates \`${duplicates}\`)` : ''}`,
+  )
+  return `${separator}${indent}Every copy:\n${copies.join('\n')}`
+}
+
 // Reviewer names stay in final-findings.json: on the PR they read as noise to its author.
 function inlineCommentBody(finding) {
   const heading = `**${SEVERITY_LABELS[finding.severity]}** · ${finding.category}`
+  const copies = locationsNote(finding, { separator: '\n\n', indent: '' })
   const rule = finding.rule ? `\n\n<sub>Rule: ${finding.rule}</sub>` : ''
-  return `${heading}\n\n${finding.description}${duplicatesNote(finding)}${rule}`
+  return `${heading}\n\n${finding.description}${duplicatesNote(finding)}${copies}${rule}`
 }
 
 function bodyOnlyLine(finding) {
   const location = `\`${finding.file}:${finding.line}\``
-  return `- **${SEVERITY_LABELS[finding.severity]}** [${finding.category}] ${finding.description} — ${location}${duplicatesNote(finding)}`
+  return `- **${SEVERITY_LABELS[finding.severity]}** [${finding.category}] ${finding.description} — ${location}${duplicatesNote(finding)}${locationsNote(finding, { separator: '\n', indent: '  ' })}`
 }
 
 export function buildPrReview({ findings, diffLines, summary, commitId }) {

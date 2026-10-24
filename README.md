@@ -24,10 +24,13 @@ Run from inside the repo you want reviewed:
 /lens-review                                   # current branch vs the default branch
 /lens-review --base develop                    # current branch vs another base ref
 /lens-review https://github.com/org/repo/pull/123   # a GitHub PR
+/lens-review --plan ../tasks/x/tech-design.md  # also check the PR against a plan it doesn't carry
 /lens-review --recast                          # throw away the saved team and cast a fresh one
 ```
 
 The base defaults to the remote's default branch, then a local `main`, then `master`.
+
+A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone, or does exactly what its plan asked, is judged against that plan.
 
 **Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
 
@@ -79,12 +82,12 @@ Every reviewer, persona and challenge turn runs on **Haiku 5.5**. Only two steps
 | Agent | Count | Model |
 |---|---|---|
 | Casting | 1, first run per repo only (~$0.50–0.80) | Opus 5.5 |
-| Anthropic-general, Generic-PR | 2 | Haiku 5.5 |
+| Anthropic-general | 1 | Haiku 5.5 |
 | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
 | Team challenge | +1 turn per persona agent | Haiku 5.5 |
 | Skeptic | 1 (~$0.30–0.50) | Opus 5.5 |
 
-A run uses at most 14 agents, or 15 on a repo's first run. Expect **~$0.50–1 per run** for the spawned agents, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Each run prints its cost telemetry after the report. If a run goes over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
+A run uses at most 13 agents, or 14 on a repo's first run. Expect **~$0.50–1 per run** for the spawned agents, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Each run prints its cost telemetry after the report. If a run goes over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
 
 ## Tests
 
