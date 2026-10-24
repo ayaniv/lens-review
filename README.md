@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="assets/logo-light.png#gh-light-mode-only" alt="Lens Review" width="300">
+  <img src="assets/logo-dark.png#gh-dark-mode-only" alt="Lens Review" width="300">
+</p>
+
 # lens-review
 
 A [Claude Code](https://claude.com/claude-code) skill that reviews a branch or PR with a synthetic team of reviewer personas, so it needs no PR-comment history. The first time you run it in a repo, it casts a team from the repo's layout and its own AGENTS.md / CLAUDE.md / Cursor / Copilot rules, and saves that team for later runs. On each review it picks the panel from what the PR changes. Five core personas (Architect, Maintainer, Reliability Engineer, Domain Expert, Reuse Scout) review every PR. The backend, design-system, data and infra personas join only when the PR touches their concern: a changed file is in their area, or a changed line anywhere looks like their concern (for example, an app overriding a design-system component's style). Deterministic pre-checks add the findings a script can be sure of, a Sonnet deep-pass reviewer reads the whole diff, and an Opus skeptic decides which findings make the final report.
