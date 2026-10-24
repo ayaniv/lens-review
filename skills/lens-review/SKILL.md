@@ -88,7 +88,7 @@ When this run casts, clock it too: `phase-clock.mjs" "<RUN_DIR>" casting start` 
 
 ---
 
-## Step 2 — Spawn the reviewers in parallel (all Haiku 5.5)
+## Step 2 — Spawn the reviewers in parallel (Haiku 5.5, the deep pass on Sonnet 5.5)
 
 Render every reviewer's prompt to a file:
 ```bash
@@ -210,11 +210,12 @@ Use the `usage` block from each Agent result, and the prices in `## Cost`.
 Cost breakdown (spawned agents only; this orchestrating session's own turns are excluded):
   Casting           (Opus):    ~Xk tokens   ~USD 0.XX   | or "skipped (team: loaded)"
   Anthropic-general (Haiku):   ~Xk tokens   ~USD 0.XX
+  Deep pass         (Sonnet):  ~Xk tokens   ~USD 0.XX   | or "skipped (variant <name>)"
   <Persona>         (Haiku):   ~Xk tokens   ~USD 0.XX   (one line per persona)
-  Challenge round   (Haiku):   ~Xk tokens   ~USD 0.XX
+  Challenge round   (Haiku):   ~Xk tokens   ~USD 0.XX   | or "skipped"
   Skeptic           (Opus):    ~Xk tokens   ~USD 0.XX
   Total subagent:              ~Xk tokens   ~$X.XX
-Challenge round: <n> personas voted (continued|fresh), <k> contested   | or: Challenge round: skipped (0 findings)
+Challenge round: <n> personas voted (continued|fresh), <k> contested   | or: Challenge round: skipped (0 findings) | or: Challenge round: skipped (variant <name>)
 Prechecks: <findings> findings (<byCheck, e.g. untested-failure-path 1, migration-order 1>) in <ms> ms; failed checks: <failedChecks, or none>
 Timing: <the line phase-clock.mjs --summary printed>
 Failed reviewers: <names, or none>
@@ -258,4 +259,4 @@ Every reviewer runs on **Haiku 5.5** (USD 0.10 in / USD 0.50 out per million tok
 
 At most 14 agents per run (15 on a repo's first run). Measured on the two A/B PRs: **~USD 0.65–0.95 and ~0.7–0.8M tokens for the spawned agents**, plus **~USD 1.30–1.75 for the orchestrating session** (Opus), so ~USD 1.70–2.20 a run, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
 
-**Alarm:** if a run goes over **USD 2 or 1M tokens**, something ballooned (a huge diff, or a team with too many scoped personas). Narrow the Scopes in `TEAM_DIR`, or split the PR, before running again.
+**Alarm:** if the spawned agents go over **USD 1.50 or 1M tokens** (about twice the measured run), something ballooned (a huge diff, or a team with too many scoped personas). Narrow the Scopes in `TEAM_DIR`, or split the PR, before running again.

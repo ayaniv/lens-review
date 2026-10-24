@@ -192,6 +192,18 @@ describe('skill layout', () => {
     assert.match(skill, /^Timing: /m)
   })
 
+  test('the cost section, telemetry template and README agree with the default mix', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const readme = readText(path.join(REPO_ROOT, 'README.md'))
+    assert.doesNotMatch(skill, /^## Step 2 .*all Haiku/m, 'the deep pass runs on Sonnet')
+    const telemetry = skill.slice(skill.indexOf('### Cost telemetry'), skill.indexOf('## Step 6'))
+    assert.match(telemetry, /Deep pass +\(Sonnet\)/)
+    assert.match(telemetry, /Challenge round: skipped \(variant <name>\)/)
+    const alarm = text => text.match(/spawned agents go over \*\*(?:USD |\$)([\d.]+) or ([\dM]+) tokens\*\*/)?.slice(1)
+    assert.ok(alarm(skill), 'SKILL.md alarm names the spawned agents and a threshold')
+    assert.deepEqual(alarm(skill), alarm(readme))
+  })
+
   test('skips the challenge round when the variant has none, keeping the Challenge round: line', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     const challengeStep = skill.slice(skill.indexOf('## Step 3'), skill.indexOf('## Step 4'))

@@ -90,7 +90,7 @@ Every reviewer runs on **Haiku 5.5**, except one deep-pass reviewer on **Sonnet 
 | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
 | Skeptic | 1 (~$0.30–0.50) | Opus 5.5 |
 
-A run uses at most 14 agents, or 15 on a repo's first run. Measured on two real PRs, a run costs **~$1.70–2.20**: ~$0.65–0.95 for the spawned agents and ~$1.30–1.75 for the orchestrating session, plus casting on a repo's first run. It takes 3–4.5 minutes. Each run prints its cost and timing telemetry after the report. If the spawned agents go over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
+A run uses at most 14 agents, or 15 on a repo's first run. Measured on two real PRs, a run costs **~$1.70–2.20**: ~$0.65–0.95 for the spawned agents and ~$1.30–1.75 for the orchestrating session, plus casting on a repo's first run. It takes 3–4.5 minutes. Each run prints its cost and timing telemetry after the report. If the spawned agents go over **$1.50 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
 
 ## Tests
 
