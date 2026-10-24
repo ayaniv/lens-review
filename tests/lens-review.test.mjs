@@ -18,6 +18,9 @@ const TEAM_DIR = path.join(SKILL_DIR, 'team')
 const CASTING_PROMPT = path.join(SKILL_DIR, 'casting-prompt.md')
 const VALIDATE_TEAM = path.join(SCRIPTS_DIR, 'validate-team.mjs')
 const CHALLENGE_PROMPT = path.join(SKILL_DIR, 'challenge-prompt.md')
+const GENERAL_PROMPT = path.join(SKILL_DIR, 'reviewer-general-prompt.md')
+const PERSONA_PROMPT = path.join(SKILL_DIR, 'reviewer-persona-prompt.md')
+const SKEPTIC_PROMPT = path.join(SKILL_DIR, 'skeptic-prompt.md')
 const TALLY_CHALLENGES = path.join(SCRIPTS_DIR, 'tally-challenges.mjs')
 // The eval is a test fixture, not part of the shipped skill.
 const EVAL_DIR = path.join(REPO_ROOT, 'tests', 'lens-review-eval')
@@ -104,6 +107,10 @@ describe('skill layout', () => {
       'scripts/apply-skeptic.mjs',
       'scripts/discover-plan-docs.mjs',
       'scripts/precheck.mjs',
+      'scripts/render-prompts.mjs',
+      'reviewer-general-prompt.md',
+      'reviewer-persona-prompt.md',
+      'skeptic-prompt.md',
       'checklist.md',
       'casting-prompt.md',
       'challenge-prompt.md',
@@ -143,7 +150,14 @@ describe('skill layout', () => {
 
   test('every agent writes its own reply file, with no code fence, and every reply goes through parse-reply.mjs', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
-    const prompts = [['SKILL.md', skill, 3], ['casting-prompt.md', readText(CASTING_PROMPT), 1], ['challenge-prompt.md', readText(CHALLENGE_PROMPT), 1]]
+    const prompts = [
+      ['SKILL.md', skill, 0],
+      ['casting-prompt.md', readText(CASTING_PROMPT), 1],
+      ['challenge-prompt.md', readText(CHALLENGE_PROMPT), 1],
+      ['reviewer-general-prompt.md', readText(GENERAL_PROMPT), 1],
+      ['reviewer-persona-prompt.md', readText(PERSONA_PROMPT), 1],
+      ['skeptic-prompt.md', readText(SKEPTIC_PROMPT), 1],
+    ]
     for (const [name, text, agentCount] of prompts) {
       assert.doesNotMatch(text, /^Return ONLY/m, `${name}: an agent still hands its JSON back in its message`)
       const writeLines = text.match(/^Write ONLY.*$/gm) ?? []
@@ -156,6 +170,16 @@ describe('skill layout', () => {
     assert.match(skill, /parse-reply\.mjs" "<RUN_DIR>\/reply-cast\.txt" "<RUN_DIR>\/cast\.json"/, 'cast.json is not written by parse-reply.mjs')
   })
 
+  test('launches every agent with a one-line prompt pointing at the prompt file a script rendered', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    for (const phase of ['"<TEAM_DIR>"\n', '"<TEAM_DIR>" --phase challenge', '"<TEAM_DIR>" --phase skeptic']) {
+      assert.ok(skill.includes(`scripts/render-prompts.mjs" "<RUN_DIR>" ${phase}`), `no render-prompts call for ${phase.trim()}`)
+    }
+    assert.match(skill, /^Read <promptPath> and follow it exactly\.$/m)
+    // Casting runs once per repo and is still filled by hand; every per-run prompt is rendered.
+    assert.doesNotMatch(skill, /<<<(PERSONA_FILE|CATEGORIES|PLAN_NOTE|SCOPE_NOTE|MERGED_FINDINGS|TALLIED_FINDINGS_JSON|APPROVED_PLAN_DOCS)>>>/)
+  })
+
   test('runs each phase\'s deterministic tail as one script call, never by hand', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     assert.match(skill, /scripts\/collect-findings\.mjs" "<RUN_DIR>" "anthropic=Anthropic"/)
@@ -165,31 +189,28 @@ describe('skill layout', () => {
   })
 
   test("the skeptic rules on each finding's own merits and never drops one for repeating another", () => {
-    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
-    const skepticPrompt = skill.slice(skill.indexOf('You are a skeptical senior engineer.'), skill.indexOf('<<<TALLIED_FINDINGS_JSON>>>'))
-    assert.match(skepticPrompt, /Never drop a finding because another finding repeats it/)
+    assert.match(readText(SKEPTIC_PROMPT), /Never drop a finding because another finding repeats it/)
   })
 
   describe('skeptic check 4: which plan can justify a drop', () => {
+    // render-prompts.mjs fills the lists; its own tests prove a PR-added doc never reaches the approved one.
     const skeptic = () => {
-      const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
-      const prompt = skill.slice(skill.indexOf('You are a skeptical senior engineer.'), skill.indexOf('<<<TALLIED_FINDINGS_JSON>>>'))
+      const prompt = readText(SKEPTIC_PROMPT)
       const dropCheck = prompt.split('\n').find(line => /^4\. /.test(line))
-      const fillRule = skill.slice(skill.indexOf('## Step 4'), skill.indexOf('You are a skeptical senior engineer.'))
-      return { prompt, dropCheck, fillRule }
+      return { prompt, dropCheck }
     }
 
     test('only the plan docs the caller passed can justify a drop', () => {
-      const { dropCheck, fillRule } = skeptic()
+      const { prompt, dropCheck } = skeptic()
       assert.ok(dropCheck.includes('APPROVED PLAN DOCS'), dropCheck)
-      assert.match(fillRule, /<<<APPROVED_PLAN_DOCS>>>` as the `passed` paths/)
+      assert.match(prompt, /APPROVED PLAN DOCS \(passed by the caller[^\n]*\n<<<APPROVED_PLAN_DOCS>>>/)
     })
 
     test('a plan doc the PR adds or changes can never appear in the drop rule', () => {
-      const { dropCheck, fillRule } = skeptic()
+      const { dropCheck } = skeptic()
       assert.ok(!dropCheck.includes('UNVERIFIED'), 'check 4 must not name the PR\'s own plan docs')
-      assert.match(fillRule, /<<<UNVERIFIED_PLAN_DOCS>>>` as the `fromPr` paths/)
-      assert.doesNotMatch(fillRule, /APPROVED_PLAN_DOCS>>>` as the `fromPr`/)
+      const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+      assert.match(skill.slice(skill.indexOf('## Step 4')), /only `passed` docs go in its approved list/)
     })
 
     test('calls the PR\'s own plan docs unverified context, never approved', () => {
@@ -208,17 +229,15 @@ describe('skill layout', () => {
   test('runs one general reviewer, which also covers test strength, with no second generic one', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     assert.doesNotMatch(skill, /Generic-PR/)
-    const generalPrompt = skill.slice(skill.indexOf('### A. Anthropic-general reviewer'), skill.indexOf('### B. '))
+    const generalPrompt = readText(GENERAL_PROMPT)
     assert.match(generalPrompt, /Tests that pass for the wrong reason/)
     assert.match(generalPrompt, /reviewer: "Anthropic"/)
   })
 
   test('keeps role framing only where it steers: the skeptic\'s stance and each persona\'s name', () => {
-    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
-    const generalPrompt = skill.slice(skill.indexOf('### A. Anthropic-general reviewer'), skill.indexOf('### B. '))
-    assert.doesNotMatch(generalPrompt, /You are a senior/)
-    assert.match(skill, /^You are <<<PERSONA_NAME>>>, one reviewer on a team\./m)
-    assert.match(skill, /^You are a skeptical senior engineer\./m)
+    assert.doesNotMatch(readText(GENERAL_PROMPT), /You are a senior/)
+    assert.match(readText(PERSONA_PROMPT), /^You are <<<PERSONA_NAME>>>, one reviewer on a team\./m)
+    assert.match(readText(SKEPTIC_PROMPT), /^You are a skeptical senior engineer\./m)
   })
 
   test('never assigns Sonnet to any step', () => {
@@ -347,10 +366,8 @@ describe('team', () => {
   test('gives the plan docs to the Domain Expert and the Data Steward, whose findings depend on the plan', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     assert.match(skill, /scripts\/discover-plan-docs\.mjs" --files "<RUN_DIR>\/files\.txt"/)
-    assert.match(skill, /`<<<PLAN_NOTE>>>` is empty unless `PLAN_DOCS` has paths/)
-    const personaPrompt = skill.slice(skill.indexOf('### B. One persona agent'), skill.indexOf('**Collect.**'))
-    assert.ok(personaPrompt.includes('<<<PLAN_NOTE>>>'))
-    assert.match(personaPrompt, /the persona is The Domain Expert or The Data Steward/)
+    assert.ok(readText(PERSONA_PROMPT).includes('<<<PLAN_NOTE>>>'))
+    assert.match(skill, /the plan note for The Domain Expert and The Data Steward/)
   })
 
   test('the Data Steward keeps migrations in order with the planned and unmerged ones', async () => {

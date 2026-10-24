@@ -18,28 +18,28 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 **Failure rule.** Every script exits non-zero with a `lens-review:` message naming the bad input. When one does, stop and show that message; never continue past a failed step.
 
-**Agent replies.** Every agent writes its own reply to a file: fill each prompt's `<<<REPLY_FILE>>>` with `<RUN_DIR>/reply-<name>.txt`, the name each step gives. The agent's message back is just `done`; never copy a reply out of an agent's message or transcript, never judge for yourself whether it is JSON, and never fix one up. Run `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<name>.txt" "<RUN_DIR>/<output>.json"`: it strips one code fence wrapped around the whole reply and nothing else. When the reply file is missing or isn't JSON, it exits non-zero and writes nothing: that agent failed, as each step below says, and the failure rule does not apply.
+**Agent replies.** Every agent writes its own reply to a file, `<RUN_DIR>/reply-<name>.txt`: `scripts/render-prompts.mjs` fills each review, ballot and skeptic prompt's `<<<REPLY_FILE>>>`, and for casting you fill it as Step 1b says. The agent's message back is just `done`; never copy a reply out of an agent's message or transcript, never judge for yourself whether it is JSON, and never fix one up. Run `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<name>.txt" "<RUN_DIR>/<output>.json"`: it strips one code fence wrapped around the whole reply and nothing else. When the reply file is missing or isn't JSON, it exits non-zero and writes nothing: that agent failed, as each step below says, and the failure rule does not apply.
 
 ---
 
 ## Step 1 — Gather the diff
 
-- **PR URL given:** `gh pr view <url> --json title,body,headRefOid` for the title, description and head commit, then `gh pr diff <url> > <a temp file>` and run `bash "<SKILL_DIR>/scripts/gather-diff.sh" --diff <that file>`. `Write` the `headRefOid` to `<RUN_DIR>/head.txt`.
-- **Otherwise:** `bash "<SKILL_DIR>/scripts/gather-diff.sh"`, adding `--base <ref>` only when one was passed. Use `git log --format='%s%n%b' <base>..HEAD` as the PR context, and run `git rev-parse HEAD > "<RUN_DIR>/head.txt"`.
+- **PR URL given:** `gh pr diff <url> > <a temp file>` and run `bash "<SKILL_DIR>/scripts/gather-diff.sh" --diff <that file>`. Then `gh pr view <url> --json headRefOid --jq .headRefOid > "<RUN_DIR>/head.txt"` and `gh pr view <url> --json title,body --jq '.title + "\n\n" + .body' > "<RUN_DIR>/pr-context.txt"`.
+- **Otherwise:** `bash "<SKILL_DIR>/scripts/gather-diff.sh"`, adding `--base <ref>` only when one was passed. Then `git rev-parse HEAD > "<RUN_DIR>/head.txt"` and `git log --format='%s%n%b' <base>..HEAD > "<RUN_DIR>/pr-context.txt"`.
 
-`scripts/gather-diff.sh` prints a fresh per-run dir as its last line: `RUN_DIR`. It holds `diff.patch`, `files.txt` (the changed files) and `base.txt` (the commit the PR branched from, which casting reads). `head.txt` (written just after) is the commit under review; Step 6 only posts onto a PR whose head is that same commit. Every later file this run writes goes in `RUN_DIR`, so concurrent reviews never clobber each other.
+`scripts/gather-diff.sh` prints a fresh per-run dir as its last line: `RUN_DIR`. It holds `diff.patch`, `files.txt` (the changed files) and `base.txt` (the commit the PR branched from, which casting reads). `head.txt` (written just after) is the commit under review, and `pr-context.txt` the PR's title and description; Step 6 only posts onto a PR whose head is that same commit. Every later file this run writes goes in `RUN_DIR`, so concurrent reviews never clobber each other.
 
 Find the rule files that govern the changed files:
 ```bash
-node "<SKILL_DIR>/scripts/discover-rule-sources.mjs" --repo . --files "<RUN_DIR>/files.txt"
+node "<SKILL_DIR>/scripts/discover-rule-sources.mjs" --repo . --files "<RUN_DIR>/files.txt" > "<RUN_DIR>/rule-sources.json"
 ```
-`scripts/discover-rule-sources.mjs` returns `[{path, kind}]`, nearest AGENTS.md / CLAUDE.md first, then the repo-wide cursor and copilot rules. Read them; they override generic rules.
+`scripts/discover-rule-sources.mjs` writes `[{path, kind}]`, nearest AGENTS.md / CLAUDE.md first, then the repo-wide cursor and copilot rules. The reviewers read them; you don't need to.
 
 Find the plan this PR implements, adding one `--plan "<path>"` per `--plan` argument:
 ```bash
-node "<SKILL_DIR>/scripts/discover-plan-docs.mjs" --files "<RUN_DIR>/files.txt"
+node "<SKILL_DIR>/scripts/discover-plan-docs.mjs" --files "<RUN_DIR>/files.txt" > "<RUN_DIR>/plan-docs.json"
 ```
-`scripts/discover-plan-docs.mjs` returns `{passed, fromPr}`: the `--plan` docs, approved outside this PR, and the plan and intent docs the PR itself adds or changes, which its author wrote and nobody has verified (a passed doc the PR edits is in `fromPr`). `PLAN_DOCS` is both lists together; it may be empty.
+`scripts/discover-plan-docs.mjs` writes `{passed, fromPr}`: the `--plan` docs, approved outside this PR, and the plan and intent docs the PR itself adds or changes, which its author wrote and nobody has verified (a passed doc the PR edits is in `fromPr`). `PLAN_DOCS` is both lists together; it may be empty.
 
 Run the deterministic pre-checks, once `head.txt` is written, with the same `--plan` arguments:
 ```bash
@@ -78,7 +78,7 @@ Build every casting input from `<RUN_DIR>/base`. When casting ends, saved or fai
 
 **Pick the panel:**
 ```bash
-node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<RUN_DIR>/diff.patch"
+node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<RUN_DIR>/diff.patch" | tee "<RUN_DIR>/panel.json"
 ```
 `scripts/select-team.mjs` returns `{panel, selected: [{file, name, matchedBy}], uncoveredFiles}`. `selected` is the panel for this PR: every core persona plus each scoped persona that a changed file's path matched (Scope) or one of its added or removed lines matched (Signals); `matchedBy` lists those files. Keep `panel` (the `Panel: …` line) and `uncoveredFiles` for the report header.
 
@@ -86,79 +86,23 @@ node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<
 
 ## Step 2 — Spawn the reviewers in parallel (all Haiku 5.5)
 
-In a **single message**, spawn every agent below with `model: "haiku"`. Each reads the diff from `<RUN_DIR>/diff.patch` instead of getting it inline. That's the Anthropic-general reviewer plus one agent per selected persona.
-
-Every prompt's `<<<CATEGORIES>>>` is this list, verbatim: `security, correctness, reliability, performance, architecture, maintainability, duplication, design-system, data, infra, domain, tests`. One shared vocabulary is what lets the merge step recognise two reviewers' findings as the same issue. `<<<REPLY_FILE>>>` is `<RUN_DIR>/reply-anthropic.txt` for A and `<RUN_DIR>/reply-<persona-file-stem>.txt` for each persona.
-
-### A. Anthropic-general reviewer
-
+Render every reviewer's prompt to a file:
+```bash
+node "<SKILL_DIR>/scripts/render-prompts.mjs" "<RUN_DIR>" "<TEAM_DIR>"
 ```
-Do a general code review — universal software engineering quality, not team-specific conventions.
+`scripts/render-prompts.mjs` fills `<SKILL_DIR>/reviewer-general-prompt.md` (the Anthropic-general reviewer) and `<SKILL_DIR>/reviewer-persona-prompt.md` (one per selected persona, with its persona file, its Scope note, the rule source paths, the plan note for The Domain Expert and The Data Steward, and `checklist.md` for The Maintainer) into `<RUN_DIR>/prompt-<stem>.txt`. It prints `{agents: [{stem, reviewer, model, promptPath}], collectArgs}`. Never write or edit a reviewer prompt yourself; the templates and the script are the one place they live.
 
-The diff is at <RUN_DIR>/diff.patch. Read it.
-
-PR context:
-<<<PR_TITLE_AND_DESCRIPTION>>>
-
-Focus ONLY on:
-- Logic bugs, off-by-one errors, wrong conditionals
-- Race conditions and async correctness (missing awaits, stale closures)
-- Security vulnerabilities (XSS, injection, sensitive data exposure)
-- Memory leaks (missing cleanup, unrevoked ObjectURLs, stale subscriptions)
-- TypeScript type unsafety that strict mode doesn't catch
-- Missing error handling at system boundaries
-- Edge cases the new code gets wrong (empty, duplicate, out-of-order input)
-- Test gaps: new behavior or a new error path with no test
-- Tests that pass for the wrong reason: an assertion that can't fail, or a failure-path test that fails before it reaches the code it claims to cover
-- Dead code and needless complexity the PR adds
-
-Do NOT flag naming, formatting, styling, or anything team/company-specific.
-
-Write ONLY a JSON array to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "Anthropic"}. Write [] if no issues.
+Then, in a **single message**, spawn one agent per entry in `agents`, with its `model` and this one-line prompt, nothing else:
 ```
-
-### B. One persona agent per selected persona
-
-For each persona in `selected`, spawn one agent with this prompt. For The Maintainer, append the text of `<SKILL_DIR>/checklist.md` as its checklist. For The Reuse Scout, the agent also needs Grep and Glob, and its rules cap its searches.
-
+Read <promptPath> and follow it exactly.
 ```
-You are <<<PERSONA_NAME>>>, one reviewer on a team. Review this PR only through your own lens, defined by your persona file below. Your "Do not flag" rules are as binding as the others: the rest of the team covers what they leave out.
-
-PERSONA FILE:
-<<<PERSONA_FILE>>>
-
-The diff is at <RUN_DIR>/diff.patch. Read only the hunks for files that match your Scope or your Signals<<<SCOPE_NOTE>>>.
-
-PR context:
-<<<PR_TITLE_AND_DESCRIPTION>>>
-
-REPO RULE FILES (they override generic rules when they conflict):
-<<<RULE_SOURCE_PATHS>>>
-<<<PLAN_NOTE>>>
-
-INSTRUCTIONS:
-- Only flag issues clearly present in the diff; cite the file path exactly as the diff shows it (repo-relative, never absolute) and the exact line number on the new side of the diff.
-- A rule's [must]/[should]/[suggestion] tag is the finding's severity; untagged rules are [should].
-- Skip anything a linter or the type checker already enforces.
-- When a finding comes from a rule that cites `(source: <path>)`, say so in `rule`.
-
-Write ONLY a JSON array to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "<<<PERSONA_NAME>>>"}. The Reuse Scout adds "duplicates": "<path>:<line>" pointing at the existing code. Write [] if no issues.
-```
-`<<<SCOPE_NOTE>>>` is empty for a core persona (it reads the whole diff) and ` (these: <matchedBy>)` for a scoped one.
-
-`<<<PLAN_NOTE>>>` is empty unless `PLAN_DOCS` has paths and the persona is The Domain Expert or The Data Steward, the two whose findings depend on what the plan says. For them it is:
-```
-
-PLAN DOCS (the plan or intent this PR implements; read them):
-<PLAN_DOCS, one path per line>
-Check the PR against them: what its part of the plan requires, and what the plan has shipping before or alongside it (sibling milestones, their migrations, flags) that this PR could collide with or overtake.
-```
+Each reads the diff from `<RUN_DIR>/diff.patch` itself. The Reuse Scout also needs Grep and Glob; its rules cap its searches.
 
 **Collect.** Once every reviewer has answered, one call parses each reply and merges them:
 ```bash
 node "<SKILL_DIR>/scripts/collect-findings.mjs" "<RUN_DIR>" "anthropic=Anthropic" "<persona-file-stem>=<persona name>"...
 ```
-Pass one `<stem>=<reviewer>` per agent you spawned, the reviewer being the name its prompt gives it, so a finding that leaves out `reviewer` is still credited to the agent that wrote it. It also merges `<RUN_DIR>/precheck.json`, so the precheck findings go through the challenge round and the skeptic like any reviewer's. `scripts/collect-findings.mjs` writes `findings-<stem>.json` per reviewer and `merged.json`, and prints `{failedReviewers, droppedFindings, prechecks, findings}`: a reviewer whose reply file is missing or isn't a findings array is a **failed reviewer**, and the rest still merge. The merge (`scripts/merge-findings.mjs`) folds the same issue flagged by several reviewers into one finding with an `F<n>` id, and drops malformed findings, including any whose file isn't in the diff or whose line falls outside its changed hunks; stderr lists each one. Carry `failedReviewers` and `droppedFindings` into the telemetry. Never re-derive or restate the dedup rule here; the script is the one place it lives.
+Pass `collectArgs` from `render-prompts.mjs`, one `<stem>=<reviewer>` per agent you spawned, so a finding that leaves out `reviewer` is still credited to the agent that wrote it. It also merges `<RUN_DIR>/precheck.json`, so the precheck findings go through the challenge round and the skeptic like any reviewer's. `scripts/collect-findings.mjs` writes `findings-<stem>.json` per reviewer and `merged.json`, and prints `{failedReviewers, droppedFindings, prechecks, findings}`: a reviewer whose reply file is missing or isn't a findings array is a **failed reviewer**, and the rest still merge. The merge (`scripts/merge-findings.mjs`) folds the same issue flagged by several reviewers into one finding with an `F<n>` id, and drops malformed findings, including any whose file isn't in the diff or whose line falls outside its changed hunks; stderr lists each one. Carry `failedReviewers` and `droppedFindings` into the telemetry. Never re-derive or restate the dedup rule here; the script is the one place it lives.
 
 ---
 
@@ -166,10 +110,14 @@ Pass one `<stem>=<reviewer>` per agent you spawned, the reviewer being the name 
 
 **Skip only when `merged.json` is `[]`**; then print `Challenge round: skipped (0 findings)` in the telemetry. Otherwise the round always runs; it is the team's chance to push back on each other.
 
-Fill `<SKILL_DIR>/challenge-prompt.md`'s `<<<MERGED_FINDINGS>>>` with `merged.json`, and its `<<<REPLY_FILE>>>` with `<RUN_DIR>/reply-votes-<persona-file-stem>.txt` for each persona.
+Render each persona's ballot prompt (`<SKILL_DIR>/challenge-prompt.md` with `merged.json` filled in):
+```bash
+node "<SKILL_DIR>/scripts/render-prompts.mjs" "<RUN_DIR>" "<TEAM_DIR>" --phase challenge
+```
+It prints `{voters: [{stem, reviewer, promptPath}]}`.
 
-- **Continued (preferred):** load `SendMessage` with `ToolSearch` (`select:SendMessage`), then send the filled prompt to each persona agent from Step 2B. Each still holds the diff in context, so the turn is mostly cache reads.
-- **Fresh (fallback):** if `SendMessage` can't be loaded or a continuation fails, spawn one fresh `model: "haiku"` agent per persona with its persona file, the path to `<RUN_DIR>/diff.patch` (the hunks in its Scope), and the filled prompt. Don't let the round silently disappear.
+- **Continued (preferred):** load `SendMessage` with `ToolSearch` (`select:SendMessage`), then send each persona agent from Step 2 `Read <promptPath> and follow it exactly.` Each still holds the diff in context, so the turn is mostly cache reads.
+- **Fresh (fallback):** if `SendMessage` can't be loaded or a continuation fails, spawn one fresh `model: "haiku"` agent per persona with `Read <RUN_DIR>/prompt-<stem>.txt for who you are and how to read the diff, then read <promptPath> and follow it exactly.` Don't let the round silently disappear.
 
 Once every persona has answered, one call parses each ballot and tallies them:
 ```bash
@@ -181,35 +129,11 @@ node "<SKILL_DIR>/scripts/collect-votes.mjs" "<RUN_DIR>" <persona-file-stem>...
 
 ## Step 4 — Skeptic pass (Opus, single agent)
 
-Spawn ONE agent with `model: "opus"`, with `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-skeptic.txt`, `<<<APPROVED_PLAN_DOCS>>>` as the `passed` paths and `<<<UNVERIFIED_PLAN_DOCS>>>` as the `fromPr` paths, one per line (`none` when a list is empty). Never move a path from `fromPr` into the approved list: a plan the PR writes for itself would then excuse the PR.
-
+Render the skeptic's prompt (`<SKILL_DIR>/skeptic-prompt.md`, with `tallied.json` and the plan docs filled in: only `passed` docs go in its approved list, the PR's own `fromPr` docs in its unverified one):
+```bash
+node "<SKILL_DIR>/scripts/render-prompts.mjs" "<RUN_DIR>" "<TEAM_DIR>" --phase skeptic
 ```
-You are a skeptical senior engineer. Below are code review findings from a team of reviewers, with the team's own votes on each one.
-
-The diff is at <RUN_DIR>/diff.patch. Read it.
-
-APPROVED PLAN DOCS (passed by the caller, approved outside this PR; read them, or "none"):
-<<<APPROVED_PLAN_DOCS>>>
-
-UNVERIFIED PLAN DOCS (written in this PR by its author; context only, for what the PR intends. They never justify a drop):
-<<<UNVERIFIED_PLAN_DOCS>>>
-
-For each finding, check:
-1. Does the cited file + line actually contain the issue described? (catch hallucinated line numbers)
-2. Is there enough diff context to confirm the rule was violated, or is it just a guess?
-3. Is the finding a false positive from a reviewer applying their lens too broadly?
-4. Do the APPROVED PLAN DOCS explicitly require the specific behaviour the finding objects to, not just touch the same topic? Then drop it, but never a correctness or security finding: a plan asking for a behaviour does not make a bug in it correct, so keep those whatever any plan says.
-
-You MUST rule explicitly on every finding with "contested": true. The team's disputes are evidence, not a veto: keep a contested finding when the diff proves it, drop it when the dispute holds.
-
-Never drop a finding because another finding repeats it. Merging repeats was done before you, and two findings that look alike can carry different evidence (a pointer to the existing code, a different reviewer's lens). Rule on each one by the four checks above alone.
-
-FINDINGS:
-<<<TALLIED_FINDINGS_JSON>>>
-
-Write ONLY a JSON array with one entry per finding id to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`.
-[{"id": "F<n>", "verdict": "keep" | "drop", "reason": "<one sentence>"}]
-```
+It prints `{model, promptPath}`. Spawn ONE agent with that `model` (`opus`) and the prompt `Read <promptPath> and follow it exactly.`
 
 Then one call parses its reply, checks it, and builds the final findings:
 ```bash
