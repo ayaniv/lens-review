@@ -194,7 +194,7 @@ describe('real-PR answer keys', () => {
   test('the stored runs score as the baseline in RESULT.md', async () => {
     const { scoreRecall } = await import(SCORE_RECALL)
     const baseline = {
-      'carpool-pr13/old-lens': { recall: 7, precision: [12, 15], duplicates: 5, must: 1 },
+      'carpool-pr13/old-lens': { recall: 7, precision: [13, 15], duplicates: 6, must: 1 },
       'carpool-pr13/new-lens': { recall: 6, precision: [6, 6], duplicates: 0, must: 0 },
       'carpool-pr13/single-agent': { recall: 7, precision: [8, 8], duplicates: 1, must: 1 },
       'lens-review-pr3/lens': { recall: 12, precision: [13, 15], duplicates: 1, must: 1 },
