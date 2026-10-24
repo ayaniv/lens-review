@@ -1,0 +1,5 @@
+[
+  "supabase/migrations/20261009000000_init.sql",
+  "supabase/migrations/20261021000000_join_group.sql",
+  "supabase/migrations/20261023000000_invite_link_access.sql"
+]

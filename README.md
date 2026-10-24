@@ -1,6 +1,6 @@
 # lens-review
 
-A [Claude Code](https://claude.com/claude-code) skill that reviews a branch or PR with a synthetic team of reviewer personas, so it needs no PR-comment history. The first time you run it in a repo, it casts a team from the repo's layout and its own AGENTS.md / CLAUDE.md / Cursor / Copilot rules, and saves that team for later runs. On each review it picks the panel from what the PR changes. Five core personas (Architect, Maintainer, Reliability Engineer, Domain Expert, Reuse Scout) review every PR. The backend, design-system, data and infra personas join only when the PR touches their concern: a changed file is in their area, or a changed line anywhere looks like their concern (for example, an app overriding a design-system component's style). The personas then challenge each other's findings, and an Opus skeptic decides which findings make the final report.
+A [Claude Code](https://claude.com/claude-code) skill that reviews a branch or PR with a synthetic team of reviewer personas, so it needs no PR-comment history. The first time you run it in a repo, it casts a team from the repo's layout and its own AGENTS.md / CLAUDE.md / Cursor / Copilot rules, and saves that team for later runs. On each review it picks the panel from what the PR changes. Five core personas (Architect, Maintainer, Reliability Engineer, Domain Expert, Reuse Scout) review every PR. The backend, design-system, data and infra personas join only when the PR touches their concern: a changed file is in their area, or a changed line anywhere looks like their concern (for example, an app overriding a design-system component's style). Deterministic pre-checks add the findings a script can be sure of, a Sonnet deep-pass reviewer reads the whole diff, and an Opus skeptic decides which findings make the final report.
 
 ## Install
 
@@ -20,12 +20,15 @@ Run from inside the repo you want reviewed:
 /lens-review --base develop                    # current branch vs another base ref
 /lens-review https://github.com/org/repo/pull/123   # a GitHub PR
 /lens-review --plan ../tasks/x/tech-design.md  # also check the PR against a plan it doesn't carry
+/lens-review --taste ~/.claude/CLAUDE.md --recast  # cast your own engineering taste into the team
 /lens-review --recast                          # throw away the saved team and cast a fresh one
 ```
 
 The base defaults to the remote's default branch, then a local `main`, then `master`.
 
-A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone, or does exactly what its plan asked, is judged against that plan.
+**Your own taste (opt-in).** `--taste <path>` adds your personal rules file, e.g. the "engineering taste" section of `~/.claude/CLAUDE.md`, to the rule sources the team is cast from. Each of its rules lands in the persona that owns that lens, marked `(source: taste)`, and the repo's own rules win where the two conflict. To set it once, export `LENS_REVIEW_TASTE=<path>`; `--taste` overrides it. Nothing else under `~/.claude` is ever read. The taste is baked into the team when it's cast, so after changing which taste file you use (or editing it), run once with `--recast`.
+
+A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone is judged against that plan. A plan the PR writes for itself is only context, though: the skeptic drops a finding for what a plan asks only when that plan came in through `--plan`, and never drops a correctness or security finding on a plan's say-so.
 
 **Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
 
@@ -72,17 +75,17 @@ The base personas the casting step starts from are in [`skills/lens-review/team/
 
 ## Cost and models
 
-Every reviewer, persona and challenge turn runs on **Haiku 5.5**. Only two steps run on **Opus 5.5**: casting (once per repo) and the skeptic. No other model is used.
+Every reviewer runs on **Haiku 5.5**, except one deep-pass reviewer on **Sonnet 5.5**. Casting (once per repo) and the skeptic run on **Opus 5.5**.
 
 | Agent | Count | Model |
 |---|---|---|
 | Casting | 1, first run per repo only (~$0.50–0.80) | Opus 5.5 |
 | Anthropic-general | 1 | Haiku 5.5 |
+| Deep pass | 1 (~$0.20–0.40) | Sonnet 5.5 |
 | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
-| Team challenge | +1 turn per persona agent | Haiku 5.5 |
 | Skeptic | 1 (~$0.30–0.50) | Opus 5.5 |
 
-A run uses at most 13 agents, or 14 on a repo's first run. Expect **~$0.50–1 per run** for the spawned agents, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Each run prints its cost telemetry after the report. If a run goes over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
+A run uses at most 14 agents, or 15 on a repo's first run. Measured on two real PRs, a run costs **~$1.70–2.20**: ~$0.65–0.95 for the spawned agents and ~$1.30–1.75 for the orchestrating session, plus casting on a repo's first run. It takes 3–4.5 minutes. Each run prints its cost and timing telemetry after the report. If the spawned agents go over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
 
 ## Tests
 

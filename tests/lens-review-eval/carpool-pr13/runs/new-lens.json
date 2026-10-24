@@ -1,0 +1,44 @@
+[
+  {
+    "id": "F3",
+    "file": "supabase/families-seed.template.sql",
+    "line": 51,
+    "severity": "should",
+    "category": "correctness"
+  },
+  {
+    "id": "F4",
+    "file": "supabase/families-seed.template.sql",
+    "line": 61,
+    "severity": "suggestion",
+    "category": "correctness"
+  },
+  {
+    "id": "F5",
+    "file": "src/data/familiesSeed.test.ts",
+    "line": 74,
+    "severity": "should",
+    "category": "tests"
+  },
+  {
+    "id": "F6",
+    "file": "src/data/familiesSeed.test.ts",
+    "line": 74,
+    "severity": "suggestion",
+    "category": "tests"
+  },
+  {
+    "id": "F13",
+    "file": "e2e/names-and-seats.spec.ts",
+    "line": 161,
+    "severity": "must",
+    "category": "tests"
+  },
+  {
+    "id": "F14",
+    "file": "e2e/standing-drives.spec.ts",
+    "line": 155,
+    "severity": "must",
+    "category": "tests"
+  }
+]

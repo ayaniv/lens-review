@@ -1,0 +1,1226 @@
+diff --git a/README.md b/README.md
+index 6437d25..d2b582f 100644
+--- a/README.md
++++ b/README.md
+@@ -19,11 +19,14 @@ Run from inside the repo you want reviewed:
+ /lens-review                                   # current branch vs the default branch
+ /lens-review --base develop                    # current branch vs another base ref
+ /lens-review https://github.com/org/repo/pull/123   # a GitHub PR
++/lens-review --plan ../tasks/x/tech-design.md  # also check the PR against a plan it doesn't carry
+ /lens-review --recast                          # throw away the saved team and cast a fresh one
+ ```
+ 
+ The base defaults to the remote's default branch, then a local `main`, then `master`.
+ 
++A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone, or does exactly what its plan asked, is judged against that plan.
++
+ **Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
+ 
+ - Each finding becomes an inline comment on its line. The summary, strengths and verdict make up the review body.
+@@ -74,12 +77,12 @@ Every reviewer, persona and challenge turn runs on **Haiku 5.5**. Only two steps
+ | Agent | Count | Model |
+ |---|---|---|
+ | Casting | 1, first run per repo only (~$0.50–0.80) | Opus 5.5 |
+-| Anthropic-general, Generic-PR | 2 | Haiku 5.5 |
++| Anthropic-general | 1 | Haiku 5.5 |
+ | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
+ | Team challenge | +1 turn per persona agent | Haiku 5.5 |
+ | Skeptic | 1 (~$0.30–0.50) | Opus 5.5 |
+ 
+-A run uses at most 14 agents, or 15 on a repo's first run. Expect **~$0.50–1 per run** for the spawned agents, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Each run prints its cost telemetry after the report. If a run goes over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
++A run uses at most 13 agents, or 14 on a repo's first run. Expect **~$0.50–1 per run** for the spawned agents, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Each run prints its cost telemetry after the report. If a run goes over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
+ 
+ ## Tests
+ 
+diff --git a/skills/lens-review/SKILL.md b/skills/lens-review/SKILL.md
+index 5a984bf..d2b7513 100644
+--- a/skills/lens-review/SKILL.md
++++ b/skills/lens-review/SKILL.md
+@@ -1,6 +1,6 @@
+ ---
+ name: lens-review
+-description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. When the review is of an open GitHub PR, offers to post it there as inline comments. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--recast].
++description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. When the review is of an open GitHub PR, offers to post it there as inline comments. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--plan <path>] [--recast].
+ allowed-tools: ["Agent", "SendMessage", "ToolSearch", "Bash", "Glob", "Grep", "Read", "Write"]
+ ---
+ 
+@@ -12,11 +12,13 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
+ 
+ **Paths.** You run with the cwd set to the repo under review. `SKILL_DIR` below means this skill's base directory, the one Claude Code printed when the skill loaded; always call scripts as `node "<SKILL_DIR>/scripts/<file>"` with that absolute path substituted, never a cwd-relative path. Shell variables don't survive between Bash calls, so substitute the run dir and team dir literally too.
+ 
+-**Arguments.** `--base <ref>` (default: the remote's default branch, else a local `main`, else `master`), an optional GitHub PR URL, and `--recast` (cast a fresh team even if one is saved).
++**Arguments.** `--base <ref>` (default: the remote's default branch, else a local `main`, else `master`), an optional GitHub PR URL, `--plan <path>` (repeatable: a plan or intent doc for this work that the PR doesn't carry itself, e.g. a task's `INTENT.md` or `tech-design.md`), and `--recast` (cast a fresh team even if one is saved).
++
++**Turns.** Each turn you take costs wall time, so make independent calls in one message: in Step 1, `gh pr view` with `gh pr diff`, then `discover-rule-sources.mjs`, `discover-plan-docs.mjs` and `team-dir.mjs` together once `RUN_DIR` exists. When agents run in parallel, wait until every one has answered before running that phase's script, rather than acting on each completion as it arrives.
+ 
+ **Failure rule.** Every script exits non-zero with a `lens-review:` message naming the bad input. When one does, stop and show that message; never continue past a failed step.
+ 
+-**Agent replies.** Never judge for yourself whether an agent's reply is JSON, and never fix one up. `Write` the reply verbatim to `<RUN_DIR>/reply-<name>.txt`, then run `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<name>.txt" "<RUN_DIR>/<output>.json"`. It strips one code fence wrapped around the whole reply and nothing else. When it exits non-zero, it has written nothing: that agent failed, as each step below says, and the failure rule does not apply.
++**Agent replies.** Every agent writes its own reply to a file: fill each prompt's `<<<REPLY_FILE>>>` with `<RUN_DIR>/reply-<name>.txt`, the name each step gives. The agent's message back is just `done`; never copy a reply out of an agent's message or transcript, never judge for yourself whether it is JSON, and never fix one up. Run `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<name>.txt" "<RUN_DIR>/<output>.json"`: it strips one code fence wrapped around the whole reply and nothing else. When the reply file is missing or isn't JSON, it exits non-zero and writes nothing: that agent failed, as each step below says, and the failure rule does not apply.
+ 
+ ---
+ 
+@@ -33,6 +35,12 @@ node "<SKILL_DIR>/scripts/discover-rule-sources.mjs" --repo . --files "<RUN_DIR>
+ ```
+ `scripts/discover-rule-sources.mjs` returns `[{path, kind}]`, nearest AGENTS.md / CLAUDE.md first, then the repo-wide cursor and copilot rules. Read them; they override generic rules.
+ 
++Find the plan this PR implements, adding one `--plan "<path>"` per `--plan` argument:
++```bash
++node "<SKILL_DIR>/scripts/discover-plan-docs.mjs" --files "<RUN_DIR>/files.txt"
++```
++`scripts/discover-plan-docs.mjs` returns the paths of the plan and intent docs the PR changes, plus the passed ones: `PLAN_DOCS`. It may be `[]`.
++
+ ---
+ 
+ ## Step 1b — Cast or load the team, then pick the panel
+@@ -58,8 +66,8 @@ Build every casting input from `<RUN_DIR>/base`. When casting ends, saved or fai
+    - `<<<REPO_DIRS>>>`: `git -C "<RUN_DIR>/base" ls-files | xargs -n1 dirname | sort -u` (cap at ~400 lines).
+    - `<<<REPO_SIGNALS>>>`: the stack manifests at the root of `<RUN_DIR>/base` (`package.json`, `pyproject.toml`, `go.mod`, `Gemfile`, `Cargo.toml`, …, whichever exist), `ls` of that root, the first ~60 lines of its README, and `git -C "<RUN_DIR>/base" log -30 --format=%s`.
+    - `<<<RULE_SOURCES>>>`: `git -C "<RUN_DIR>/base" ls-files > "<RUN_DIR>/all-files.txt"`, then `node "<SKILL_DIR>/scripts/discover-rule-sources.mjs" --repo "<RUN_DIR>/base" --files "<RUN_DIR>/all-files.txt"`, and the text of each file it lists under `<RUN_DIR>/base`, headed by its path. Cap at ~15k tokens, dropping the most deeply nested files first (ties: last in path order). The cast team is saved for every future PR, so the cut must not depend on which PR triggered it.
+-2. Spawn ONE agent with `model: "opus"` and the prompt from `<SKILL_DIR>/casting-prompt.md` with those placeholders filled. Casting is the one step where judgement about the whole repo matters, and it runs once per repo.
+-3. It returns `[{file, markdown}]`. Parse it with `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-cast.txt" "<RUN_DIR>/cast.json"` (a reply that isn't JSON is a failed cast, handled like a failed validation in 4), then save it with `node "<SKILL_DIR>/scripts/save-cast.mjs" "<TEAM_DIR>" "<RUN_DIR>/cast.json"`. Never `Write` persona files yourself: casting reads the reviewed repo's own rule files, so its output is untrusted, and `scripts/save-cast.mjs` refuses any file name that isn't a bare kebab-case `.md` name, or any persona that doesn't parse, before writing anything. Then run `scripts/validate-team.mjs` on `TEAM_DIR` (`team: cast`).
++2. Spawn ONE agent with `model: "opus"` and the prompt from `<SKILL_DIR>/casting-prompt.md` with those placeholders filled, and `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-cast.txt`. Casting is the one step where judgement about the whole repo matters, and it runs once per repo.
++3. It writes `[{file, markdown}]`. Parse it with `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-cast.txt" "<RUN_DIR>/cast.json"` (a reply that isn't JSON is a failed cast, handled like a failed validation in 4), then save it with `node "<SKILL_DIR>/scripts/save-cast.mjs" "<TEAM_DIR>" "<RUN_DIR>/cast.json"`. Never `Write` persona files yourself: casting reads the reviewed repo's own rule files, so its output is untrusted, and `scripts/save-cast.mjs` refuses any file name that isn't a bare kebab-case `.md` name, or any persona that doesn't parse, before writing anything. Then run `scripts/validate-team.mjs` on `TEAM_DIR` (`team: cast`).
+ 4. If saving or validation fails, show the errors, delete any written files and cast once more, adding the validation errors to the prompt. If the second cast fails too, **stop** with the errors.
+ 
+ **Pick the panel:**
+@@ -72,14 +80,14 @@ node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<
+ 
+ ## Step 2 — Spawn the reviewers in parallel (all Haiku 5.5)
+ 
+-In a **single message**, spawn every agent below with `model: "haiku"`. Each reads the diff from `<RUN_DIR>/diff.patch` instead of getting it inline. That's 2 generic reviewers plus one agent per selected persona.
++In a **single message**, spawn every agent below with `model: "haiku"`. Each reads the diff from `<RUN_DIR>/diff.patch` instead of getting it inline. That's the Anthropic-general reviewer plus one agent per selected persona.
+ 
+-Every prompt's `<<<CATEGORIES>>>` is this list, verbatim: `security, correctness, reliability, performance, architecture, maintainability, duplication, design-system, data, infra, domain, tests`. One shared vocabulary is what lets the merge step recognise two reviewers' findings as the same issue.
++Every prompt's `<<<CATEGORIES>>>` is this list, verbatim: `security, correctness, reliability, performance, architecture, maintainability, duplication, design-system, data, infra, domain, tests`. One shared vocabulary is what lets the merge step recognise two reviewers' findings as the same issue. `<<<REPLY_FILE>>>` is `<RUN_DIR>/reply-anthropic.txt` for A and `<RUN_DIR>/reply-<persona-file-stem>.txt` for each persona.
+ 
+ ### A. Anthropic-general reviewer
+ 
+ ```
+-You are a senior Anthropic engineer doing a general code review — universal software engineering quality, not team-specific conventions.
++Do a general code review — universal software engineering quality, not team-specific conventions.
+ 
+ The diff is at <RUN_DIR>/diff.patch. Read it.
+ 
+@@ -93,34 +101,17 @@ Focus ONLY on:
+ - Memory leaks (missing cleanup, unrevoked ObjectURLs, stale subscriptions)
+ - TypeScript type unsafety that strict mode doesn't catch
+ - Missing error handling at system boundaries
+-- Test gaps for new behavior that is entirely untested
++- Edge cases the new code gets wrong (empty, duplicate, out-of-order input)
++- Test gaps: new behavior or a new error path with no test
++- Tests that pass for the wrong reason: an assertion that can't fail, or a failure-path test that fails before it reaches the code it claims to cover
++- Dead code and needless complexity the PR adds
+ 
+ Do NOT flag naming, formatting, styling, or anything team/company-specific.
+ 
+-Return ONLY a JSON array, no other text and no code fence. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "Anthropic"}. Return [] if no issues.
+-```
+-
+-### B. Generic-PR reviewer
+-
++Write ONLY a JSON array to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "Anthropic"}. Write [] if no issues.
+ ```
+-You are a senior engineer doing a thorough code review of a PR.
+-
+-The diff is at <RUN_DIR>/diff.patch. Read it.
+-
+-PR context:
+-<<<PR_TITLE_AND_DESCRIPTION>>>
+ 
+-Review for:
+-- Correctness: logic errors, edge cases, off-by-ones, wrong assumptions
+-- Code quality: clarity, unnecessary complexity, dead code, naming
+-- Performance: unnecessary re-renders, expensive operations in hot paths, queries in loops
+-- Test coverage: is new behavior tested? are edge cases / error paths covered?
+-- Security: XSS, injection, sensitive data exposure
+-
+-Return ONLY a JSON array, no other text and no code fence. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "Generic"}. Return [] if no issues.
+-```
+-
+-### C. One persona agent per selected persona
++### B. One persona agent per selected persona
+ 
+ For each persona in `selected`, spawn one agent with this prompt. For The Maintainer, append the text of `<SKILL_DIR>/checklist.md` as its checklist. For The Reuse Scout, the agent also needs Grep and Glob, and its rules cap its searches.
+ 
+@@ -137,6 +128,7 @@ PR context:
+ 
+ REPO RULE FILES (they override generic rules when they conflict):
+ <<<RULE_SOURCE_PATHS>>>
++<<<PLAN_NOTE>>>
+ 
+ INSTRUCTIONS:
+ - Only flag issues clearly present in the diff; cite the file path exactly as the diff shows it (repo-relative, never absolute) and the exact line number on the new side of the diff.
+@@ -144,15 +136,23 @@ INSTRUCTIONS:
+ - Skip anything a linter or the type checker already enforces.
+ - When a finding comes from a rule that cites `(source: <path>)`, say so in `rule`.
+ 
+-Return ONLY a JSON array, no other text and no code fence. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "<<<PERSONA_NAME>>>"}. The Reuse Scout adds "duplicates": "<path>:<line>" pointing at the existing code. Return [] if no issues.
++Write ONLY a JSON array to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`. Each finding: {file, line, severity (must|should|suggestion), category (one of: <<<CATEGORIES>>>), description, rule, reviewer: "<<<PERSONA_NAME>>>"}. The Reuse Scout adds "duplicates": "<path>:<line>" pointing at the existing code. Write [] if no issues.
+ ```
+ `<<<SCOPE_NOTE>>>` is empty for a core persona (it reads the whole diff) and ` (these: <matchedBy>)` for a scoped one.
+ 
+-**Collect.** For each agent, `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-<agent>.txt" "<RUN_DIR>/findings-<agent>.json"`. When it exits non-zero, that agent is a **failed reviewer**: list it in the telemetry and go on with the rest. Then:
++`<<<PLAN_NOTE>>>` is empty unless `PLAN_DOCS` has paths and the persona is The Domain Expert or The Data Steward, the two whose findings depend on what the plan says. For them it is:
++```
++
++PLAN DOCS (the plan or intent this PR implements; read them):
++<PLAN_DOCS, one path per line>
++Check the PR against them: what its part of the plan requires, and what the plan has shipping before or alongside it (sibling milestones, their migrations, flags) that this PR could collide with or overtake.
++```
++
++**Collect.** Once every reviewer has answered, one call parses each reply and merges them:
+ ```bash
+-node "<SKILL_DIR>/scripts/merge-findings.mjs" --diff "<RUN_DIR>/diff.patch" "<RUN_DIR>"/findings-*.json > "<RUN_DIR>/merged.json"
++node "<SKILL_DIR>/scripts/collect-findings.mjs" "<RUN_DIR>" "anthropic=Anthropic" "<persona-file-stem>=<persona name>"...
+ ```
+-`scripts/merge-findings.mjs` merges the same issue flagged by several reviewers into one finding (highest severity, every reviewer in `reviewers`), gives each an `F<n>` id, and reports malformed findings on stderr — including any whose file isn't in the diff or whose line falls outside its changed hunks. Carry its "dropped N malformed findings" line into the telemetry. Never re-derive or restate its dedup rule here; the script is the one place it lives.
++Pass one `<stem>=<reviewer>` per agent you spawned, the reviewer being the name its prompt gives it, so a finding that leaves out `reviewer` is still credited to the agent that wrote it. `scripts/collect-findings.mjs` writes `findings-<stem>.json` per reviewer and `merged.json`, and prints `{failedReviewers, droppedFindings, findings}`: a reviewer whose reply file is missing or isn't a findings array is a **failed reviewer**, and the rest still merge. The merge (`scripts/merge-findings.mjs`) folds the same issue flagged by several reviewers into one finding with an `F<n>` id, and drops malformed findings, including any whose file isn't in the diff or whose line falls outside its changed hunks; stderr lists each one. Carry `failedReviewers` and `droppedFindings` into the telemetry. Never re-derive or restate the dedup rule here; the script is the one place it lives.
+ 
+ ---
+ 
+@@ -160,47 +160,53 @@ node "<SKILL_DIR>/scripts/merge-findings.mjs" --diff "<RUN_DIR>/diff.patch" "<RU
+ 
+ **Skip only when `merged.json` is `[]`**; then print `Challenge round: skipped (0 findings)` in the telemetry. Otherwise the round always runs; it is the team's chance to push back on each other.
+ 
+-Fill `<SKILL_DIR>/challenge-prompt.md`'s `<<<MERGED_FINDINGS>>>` with `merged.json`.
++Fill `<SKILL_DIR>/challenge-prompt.md`'s `<<<MERGED_FINDINGS>>>` with `merged.json`, and its `<<<REPLY_FILE>>>` with `<RUN_DIR>/reply-votes-<persona-file-stem>.txt` for each persona.
+ 
+-- **Continued (preferred):** load `SendMessage` with `ToolSearch` (`select:SendMessage`), then send the filled prompt to each persona agent from Step 2C. Each still holds the diff in context, so the turn is mostly cache reads.
++- **Continued (preferred):** load `SendMessage` with `ToolSearch` (`select:SendMessage`), then send the filled prompt to each persona agent from Step 2B. Each still holds the diff in context, so the turn is mostly cache reads.
+ - **Fresh (fallback):** if `SendMessage` can't be loaded or a continuation fails, spawn one fresh `model: "haiku"` agent per persona with its persona file, the path to `<RUN_DIR>/diff.patch` (the hunks in its Scope), and the filled prompt. Don't let the round silently disappear.
+ 
+-For each reply, `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-votes-<persona-file-stem>.txt" "<RUN_DIR>/votes-<persona-file-stem>.json"` (a non-zero exit counts as a failed voter in the telemetry), then:
++Once every persona has answered, one call parses each ballot and tallies them:
+ ```bash
+-node "<SKILL_DIR>/scripts/tally-challenges.mjs" "<RUN_DIR>/merged.json" "<RUN_DIR>"/votes-*.json > "<RUN_DIR>/tallied.json"
++node "<SKILL_DIR>/scripts/collect-votes.mjs" "<RUN_DIR>" <persona-file-stem>...
+ ```
+-`scripts/tally-challenges.mjs` attaches each finding's `challenge: {agree, dispute}`, marks it `contested` when disputes outnumber agreements, and reports dropped votes (unknown ids, unknown verdicts, self-votes) on stderr. Record `Challenge round: <n> personas voted (continued|fresh), <k> contested`.
++`scripts/collect-votes.mjs` writes `votes-<stem>.json` per persona and `tallied.json`, and prints `{voted, failedVoters, contested, droppedVotes}`. The tally (`scripts/tally-challenges.mjs`) attaches each finding's `challenge: {agree, dispute}`, marks it `contested` when disputes outnumber agreements, and drops votes it can't count (unknown ids, unknown verdicts, self-votes) with each one on stderr. When the round is skipped, run it with no stems, so `tallied.json` still exists. Record `Challenge round: <n> personas voted (continued|fresh), <k> contested`.
+ 
+ ---
+ 
+ ## Step 4 — Skeptic pass (Opus, single agent)
+ 
+-Spawn ONE agent with `model: "opus"`:
++Spawn ONE agent with `model: "opus"`, with `<<<REPLY_FILE>>>` as `<RUN_DIR>/reply-skeptic.txt` and `<<<PLAN_DOCS>>>` as the `PLAN_DOCS` paths, one per line (`none` when there are none):
+ 
+ ```
+ You are a skeptical senior engineer. Below are code review findings from a team of reviewers, with the team's own votes on each one.
+ 
+ The diff is at <RUN_DIR>/diff.patch. Read it.
+ 
++PLAN DOCS (the plan or intent this PR implements; read them, or "none"):
++<<<PLAN_DOCS>>>
++
+ For each finding, check:
+ 1. Does the cited file + line actually contain the issue described? (catch hallucinated line numbers)
+ 2. Is there enough diff context to confirm the rule was violated, or is it just a guess?
+ 3. Is the finding a false positive from a reviewer applying their lens too broadly?
++4. Does the plan or design doc this PR implements require what the finding objects to? If it does, drop the finding: the plan was already approved.
+ 
+ You MUST rule explicitly on every finding with "contested": true. The team's disputes are evidence, not a veto: keep a contested finding when the diff proves it, drop it when the dispute holds.
+ 
+-Never drop a finding because another finding repeats it. Merging repeats was done before you, and two findings that look alike can carry different evidence (a pointer to the existing code, a different reviewer's lens). Rule on each one by the three checks above alone.
++Never drop a finding because another finding repeats it. Merging repeats was done before you, and two findings that look alike can carry different evidence (a pointer to the existing code, a different reviewer's lens). Rule on each one by the four checks above alone.
+ 
+ FINDINGS:
+ <<<TALLIED_FINDINGS_JSON>>>
+ 
+-Return ONLY a JSON array with one entry per finding id, no other text and no code fence:
++Write ONLY a JSON array with one entry per finding id to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`.
+ [{"id": "F<n>", "verdict": "keep" | "drop", "reason": "<one sentence>"}]
+ ```
+ 
+-Parse its reply with `node "<SKILL_DIR>/scripts/parse-reply.mjs" "<RUN_DIR>/reply-skeptic.txt" "<RUN_DIR>/skeptic.json"`. If the skeptic fails, the parse exits non-zero, or `skeptic.json` leaves **any** finding id from `tallied.json` without a verdict, **stop** and say which ids it skipped. A finding the skeptic never ruled on would otherwise vanish from the report without a trace. Never print the unfiltered findings as the final review.
+-
+-Build `<RUN_DIR>/final-findings.json` with `Write`: every finding from `tallied.json` whose verdict is `keep`, unchanged (`id`, `file`, `line`, `severity`, `category`, `description`, `rule`, `reviewers`, `duplicates`, `challenge`, `contested`), plus `"skeptic": {"verdict", "reason"}`.
++Then one call parses its reply, checks it, and builds the final findings:
++```bash
++node "<SKILL_DIR>/scripts/apply-skeptic.mjs" "<RUN_DIR>"
++```
++`scripts/apply-skeptic.mjs` writes `skeptic.json` and `final-findings.json` (every finding the skeptic kept, unchanged, plus its `skeptic: {verdict, reason}`), and prints `{kept, dropped}`. When the reply is missing or not JSON, or leaves **any** finding id from `tallied.json` without a keep/drop verdict, it exits non-zero naming the ids: **stop** and show that. A finding the skeptic never ruled on would otherwise vanish from the report without a trace. Never print the unfiltered findings as the final review. When `tallied.json` is `[]`, skip the skeptic and run the script anyway: it writes an empty `final-findings.json`.
+ 
+ ---
+ 
+@@ -250,7 +256,7 @@ _(APPROVED = ready to send. CHANGES REQUIRED = address Must Fix items first.)_
+ Findings JSON: <RUN_DIR>/final-findings.json
+ ```
+ 
+-A duplication finding also names the existing code: `— \`src/format.ts:4\` (duplicates \`src/utils/money.ts:2\`)`. Drop the per-finding reviewer names from the public findings list (they confuse PR authors); they stay in `final-findings.json`. Omit any findings section that is empty.
++A duplication finding also names the existing code: `— \`src/format.ts:4\` (duplicates \`src/utils/money.ts:2\`)`. A finding with `locations` stands for every copy it lists: name each one, `— \`e2e/a.spec.ts:21\`, \`e2e/b.spec.ts:16\` (duplicates \`e2e/helpers.ts:27\`)`. Drop the per-finding reviewer names from the public findings list (they confuse PR authors); they stay in `final-findings.json`. Omit any findings section that is empty.
+ 
+ ### Cost telemetry (always print after the report)
+ 
+@@ -258,12 +264,11 @@ Use the `usage` block from each Agent result, and the prices in `## Cost`.
+ 
+ ```
+ Cost breakdown (spawned agents only; this orchestrating session's own turns are excluded):
+-  Casting           (Opus):    ~Xk tokens   ~$0.XX   | or "skipped (team: loaded)"
+-  Anthropic-general (Haiku):   ~Xk tokens   ~$0.XX
+-  Generic-PR        (Haiku):   ~Xk tokens   ~$0.XX
+-  <Persona>         (Haiku):   ~Xk tokens   ~$0.XX   (one line per persona)
+-  Challenge round   (Haiku):   ~Xk tokens   ~$0.XX
+-  Skeptic           (Opus):    ~Xk tokens   ~$0.XX
++  Casting           (Opus):    ~Xk tokens   ~USD 0.XX   | or "skipped (team: loaded)"
++  Anthropic-general (Haiku):   ~Xk tokens   ~USD 0.XX
++  <Persona>         (Haiku):   ~Xk tokens   ~USD 0.XX   (one line per persona)
++  Challenge round   (Haiku):   ~Xk tokens   ~USD 0.XX
++  Skeptic           (Opus):    ~Xk tokens   ~USD 0.XX
+   Total subagent:              ~Xk tokens   ~$X.XX
+ Challenge round: <n> personas voted (continued|fresh), <k> contested   | or: Challenge round: skipped (0 findings)
+ Failed reviewers: <names, or none>
+@@ -295,16 +300,16 @@ Run this after the report whenever the review is of a GitHub PR. Posting writes
+ 
+ ## Cost
+ 
+-Every reviewer, persona and challenge turn runs on **Haiku 5.5** ($0.10 in / $0.50 out per million tokens, for prompts up to 100K tokens; $0.50 / $2.50 beyond). Only casting (first run per repo) and the skeptic run on **Opus 5.5** ($4 / $20). No other model is used.
++Every reviewer, persona and challenge turn runs on **Haiku 5.5** (USD 0.10 in / USD 0.50 out per million tokens, for prompts up to 100K tokens; USD 0.50 / USD 2.50 beyond). Only casting (first run per repo) and the skeptic run on **Opus 5.5** (USD 4 / USD 20). No other model is used.
+ 
+ | Agent | Count | Model |
+ |---|---|---|
+-| Casting | 1, first run per repo only (~$0.50–0.80) | Opus 5.5 |
+-| Anthropic-general, Generic-PR | 2 | Haiku 5.5 |
++| Casting | 1, first run per repo only (~USD 0.50–0.80) | Opus 5.5 |
++| Anthropic-general | 1 | Haiku 5.5 |
+ | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
+-| Team challenge | +1 turn per persona agent (fresh agents if `SendMessage` is unavailable, ~$0.05) | Haiku 5.5 |
+-| Skeptic | 1 (~$0.30–0.50) | Opus 5.5 |
++| Team challenge | +1 turn per persona agent (fresh agents if `SendMessage` is unavailable, ~USD 0.05) | Haiku 5.5 |
++| Skeptic | 1 (~USD 0.30–0.50) | Opus 5.5 |
+ 
+-At most 14 agents per run (15 on a repo's first run). Expect **~$0.50–1 per run for the spawned agents**, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
++At most 13 agents per run (14 on a repo's first run). Expect **~USD 0.50–1 per run for the spawned agents**, plus ~USD 0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
+ 
+-**Alarm:** if a run goes over **$2 or 1M tokens**, something ballooned (a huge diff, or a team with too many scoped personas). Narrow the Scopes in `TEAM_DIR`, or split the PR, before running again.
++**Alarm:** if a run goes over **USD 2 or 1M tokens**, something ballooned (a huge diff, or a team with too many scoped personas). Narrow the Scopes in `TEAM_DIR`, or split the PR, before running again.
+diff --git a/skills/lens-review/casting-prompt.md b/skills/lens-review/casting-prompt.md
+index c1e0ec6..6e83fd4 100644
+--- a/skills/lens-review/casting-prompt.md
++++ b/skills/lens-review/casting-prompt.md
+@@ -49,6 +49,6 @@ RULE SOURCES (the repo's own AGENTS.md / CLAUDE.md / cursor / copilot rule files
+ - A signal is a JavaScript regex (case-sensitive, no slashes or flags), tested on one changed line at a time, at most 200 characters, and it must not match an empty line. Make each one specific: a signal that matches ordinary lines (`import`, `return`, `=`) puts its persona on nearly every PR, and every extra persona is one more paid reviewer. At most 5 signals per persona.
+ - Scope globs are repo-relative, with no leading `./` or `/`.
+ 
+-Return ONLY a JSON array, one entry per persona, no other text and no code fence:
++Write ONLY a JSON array, one entry per persona, to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`.
+ [{"file": "<kebab-case>.md", "markdown": "<the full persona file>"}]
+ Keep the base profiles' file names for core and area personas.
+diff --git a/skills/lens-review/challenge-prompt.md b/skills/lens-review/challenge-prompt.md
+index d6eefd1..4165587 100644
+--- a/skills/lens-review/challenge-prompt.md
++++ b/skills/lens-review/challenge-prompt.md
+@@ -9,6 +9,6 @@ Vote only where you have a grounded opinion: skip a finding entirely when it is
+ MERGED FINDINGS:
+ <<<MERGED_FINDINGS>>>
+ 
+-Return ONLY JSON, no other text and no code fence:
++Write ONLY JSON to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`.
+ {"persona": "<your persona name, exactly as in your persona file>", "votes": [{"id": "F<n>", "verdict": "agree" | "dispute", "reason": "<one sentence>"}]}
+-Return `"votes": []` if you have no grounded opinion on any finding.
++Write `"votes": []` if you have no grounded opinion on any finding.
+diff --git a/skills/lens-review/scripts/apply-skeptic.mjs b/skills/lens-review/scripts/apply-skeptic.mjs
+new file mode 100644
+index 0000000..7caaa75
+--- /dev/null
++++ b/skills/lens-review/scripts/apply-skeptic.mjs
+@@ -0,0 +1,43 @@
++// The skeptic's deterministic tail in one call: parse its reply into skeptic.json, check it
++// ruled on every finding id in tallied.json, and build final-findings.json from the ones it
++// kept. A finding the skeptic never ruled on would otherwise vanish from the report without a
++// trace, so any gap fails the run instead of producing a partial review.
++//
++//   node apply-skeptic.mjs <run-dir>
++//     reads <run-dir>/reply-skeptic.txt and tallied.json, writes skeptic.json and
++//     final-findings.json → {kept, dropped} on stdout
++import path from 'node:path'
++import { fail, isRunDirectly, readJsonArrayFile } from './lib/cli.mjs'
++import { parseReply, writeJson } from './parse-reply.mjs'
++
++const VERDICTS = ['keep', 'drop']
++
++// Throws naming every id the rulings leave out or rule on with an unknown verdict.
++export function applySkeptic(findings, rulings) {
++  if (!Array.isArray(rulings)) throw new Error('the skeptic reply is not a JSON array of rulings')
++  const rulingById = new Map(rulings.filter(ruling => VERDICTS.includes(ruling?.verdict)).map(ruling => [ruling.id, ruling]))
++  const unruled = findings.filter(finding => !rulingById.has(finding.id)).map(finding => finding.id)
++  if (unruled.length > 0) throw new Error(`the skeptic gave no keep/drop verdict for ${unruled.join(', ')}`)
++  return findings
++    .filter(finding => rulingById.get(finding.id).verdict === 'keep')
++    .map(finding => {
++      const { verdict, reason } = rulingById.get(finding.id)
++      return { ...finding, skeptic: { verdict, reason: reason ?? '' } }
++    })
++}
++
++if (isRunDirectly(import.meta.url)) {
++  const [runDir] = process.argv.slice(2)
++  if (!runDir) fail('usage: apply-skeptic.mjs <run-dir>')
++  const findings = readJsonArrayFile(path.join(runDir, 'tallied.json'))
++  try {
++    // With nothing to rule on, no skeptic runs and the review simply has no findings.
++    const rulings = findings.length === 0 ? [] : parseReply(path.join(runDir, 'reply-skeptic.txt'))
++    writeJson(path.join(runDir, 'skeptic.json'), rulings)
++    const kept = applySkeptic(findings, rulings)
++    writeJson(path.join(runDir, 'final-findings.json'), kept)
++    console.log(JSON.stringify({ kept: kept.length, dropped: findings.length - kept.length }))
++  } catch (error) {
++    fail(error.message)
++  }
++}
+diff --git a/skills/lens-review/scripts/build-pr-review.mjs b/skills/lens-review/scripts/build-pr-review.mjs
+index b2f0a9a..5873779 100644
+--- a/skills/lens-review/scripts/build-pr-review.mjs
++++ b/skills/lens-review/scripts/build-pr-review.mjs
+@@ -26,16 +26,26 @@ function duplicatesNote(finding) {
+   return finding.duplicates ? ` Duplicates \`${finding.duplicates}\`.` : ''
+ }
+ 
++// A merged duplication finding is posted once, so its comment names every copy it stands for.
++function locationsNote(finding, { separator, indent }) {
++  if (!finding.locations) return ''
++  const copies = finding.locations.map(({ file, line, duplicates }) =>
++    `${indent}- \`${file}:${line}\`${duplicates ? ` (duplicates \`${duplicates}\`)` : ''}`,
++  )
++  return `${separator}${indent}Every copy:\n${copies.join('\n')}`
++}
++
+ // Reviewer names stay in final-findings.json: on the PR they read as noise to its author.
+ function inlineCommentBody(finding) {
+   const heading = `**${SEVERITY_LABELS[finding.severity]}** · ${finding.category}`
++  const copies = locationsNote(finding, { separator: '\n\n', indent: '' })
+   const rule = finding.rule ? `\n\n<sub>Rule: ${finding.rule}</sub>` : ''
+-  return `${heading}\n\n${finding.description}${duplicatesNote(finding)}${rule}`
++  return `${heading}\n\n${finding.description}${duplicatesNote(finding)}${copies}${rule}`
+ }
+ 
+ function bodyOnlyLine(finding) {
+   const location = `\`${finding.file}:${finding.line}\``
+-  return `- **${SEVERITY_LABELS[finding.severity]}** [${finding.category}] ${finding.description} — ${location}${duplicatesNote(finding)}`
++  return `- **${SEVERITY_LABELS[finding.severity]}** [${finding.category}] ${finding.description} — ${location}${duplicatesNote(finding)}${locationsNote(finding, { separator: '\n', indent: '  ' })}`
+ }
+ 
+ export function buildPrReview({ findings, diffLines, summary, commitId }) {
+diff --git a/skills/lens-review/scripts/collect-findings.mjs b/skills/lens-review/scripts/collect-findings.mjs
+new file mode 100644
+index 0000000..64a5e13
+--- /dev/null
++++ b/skills/lens-review/scripts/collect-findings.mjs
+@@ -0,0 +1,57 @@
++// The reviewer phase's whole deterministic tail in one call: parse each reviewer's reply into
++// findings-<stem>.json (crediting a finding with no reviewer to the agent that wrote it), then
++// merge every one that parsed into merged.json. A reviewer whose reply is missing or isn't a
++// findings array is a failed reviewer, listed in the summary; the rest still merge.
++//
++//   node collect-findings.mjs <run-dir> <stem>=<reviewer name>...
++//     reads <run-dir>/reply-<stem>.txt and <run-dir>/diff.patch, writes findings-<stem>.json
++//     and merged.json → {failedReviewers, droppedFindings, findings} on stdout
++import path from 'node:path'
++import { fail, isRunDirectly, reportDropped } from './lib/cli.mjs'
++import { mergeFindings, readDiffLines } from './merge-findings.mjs'
++import { parseReply, writeJson } from './parse-reply.mjs'
++
++export function parseAgentArg(arg) {
++  const separatorIndex = arg.indexOf('=')
++  const stem = arg.slice(0, separatorIndex)
++  const reviewer = arg.slice(separatorIndex + 1)
++  if (separatorIndex < 1 || !reviewer) throw new Error(`"${arg}" is not <stem>=<reviewer name>`)
++  return { stem, reviewer }
++}
++
++export function collectFindings(runDir, agents) {
++  const findingsPerReviewer = []
++  const failedReviewers = []
++  for (const { stem, reviewer } of agents) {
++    try {
++      const findings = parseReply(path.join(runDir, `reply-${stem}.txt`), { defaultReviewer: reviewer })
++      writeJson(path.join(runDir, `findings-${stem}.json`), findings)
++      findingsPerReviewer.push(findings)
++    } catch (error) {
++      failedReviewers.push({ reviewer, reason: error.message })
++    }
++  }
++  const { findings, dropped } = mergeFindings(findingsPerReviewer, readDiffLines(path.join(runDir, 'diff.patch')))
++  writeJson(path.join(runDir, 'merged.json'), findings)
++  return { findings, dropped, failedReviewers }
++}
++
++if (isRunDirectly(import.meta.url)) {
++  const [runDir, ...agentArgs] = process.argv.slice(2)
++  if (!runDir || agentArgs.length === 0) fail('usage: collect-findings.mjs <run-dir> <stem>=<reviewer name>...')
++  let agents
++  try {
++    agents = agentArgs.map(parseAgentArg)
++  } catch (error) {
++    fail(error.message)
++  }
++  const { findings, dropped, failedReviewers } = collectFindings(runDir, agents)
++  for (const { reason } of failedReviewers) console.error(`lens-review: failed reviewer: ${reason}`)
++  reportDropped('findings', dropped)
++  const summary = {
++    failedReviewers: failedReviewers.map(({ reviewer }) => reviewer),
++    droppedFindings: dropped.length,
++    findings: findings.length,
++  }
++  console.log(JSON.stringify(summary))
++}
+diff --git a/skills/lens-review/scripts/collect-votes.mjs b/skills/lens-review/scripts/collect-votes.mjs
+new file mode 100644
+index 0000000..7ebbadf
+--- /dev/null
++++ b/skills/lens-review/scripts/collect-votes.mjs
+@@ -0,0 +1,44 @@
++// The challenge round's deterministic tail in one call: parse each persona's ballot into
++// votes-<stem>.json, then tally every ballot that parsed against merged.json into
++// tallied.json. A persona whose reply is missing or isn't JSON is a failed voter.
++//
++//   node collect-votes.mjs <run-dir> [<persona-file-stem>...]
++//     reads <run-dir>/reply-votes-<stem>.txt and merged.json, writes votes-<stem>.json and
++//     tallied.json → {voted, failedVoters, contested, droppedVotes} on stdout
++import path from 'node:path'
++import { fail, isRunDirectly, readJsonArrayFile, reportDropped } from './lib/cli.mjs'
++import { parseReply, writeJson } from './parse-reply.mjs'
++import { tallyChallenges } from './tally-challenges.mjs'
++
++export function collectVotes(runDir, stems) {
++  const ballots = []
++  const failedVoters = []
++  for (const stem of stems) {
++    try {
++      const ballot = parseReply(path.join(runDir, `reply-votes-${stem}.txt`))
++      writeJson(path.join(runDir, `votes-${stem}.json`), ballot)
++      ballots.push(ballot)
++    } catch (error) {
++      failedVoters.push({ stem, reason: error.message })
++    }
++  }
++  const { findings, dropped } = tallyChallenges(readJsonArrayFile(path.join(runDir, 'merged.json')), ballots)
++  writeJson(path.join(runDir, 'tallied.json'), findings)
++  return { findings, dropped, voted: ballots.length, failedVoters }
++}
++
++if (isRunDirectly(import.meta.url)) {
++  const [runDir, ...stems] = process.argv.slice(2)
++  // No stems is a skipped round (no findings to vote on): tallied.json is still written.
++  if (!runDir) fail('usage: collect-votes.mjs <run-dir> [<persona-file-stem>...]')
++  const { findings, dropped, voted, failedVoters } = collectVotes(runDir, stems)
++  for (const { reason } of failedVoters) console.error(`lens-review: failed voter: ${reason}`)
++  reportDropped('votes', dropped)
++  const summary = {
++    voted,
++    failedVoters: failedVoters.map(({ stem }) => stem),
++    contested: findings.filter(finding => finding.contested).length,
++    droppedVotes: dropped.length,
++  }
++  console.log(JSON.stringify(summary))
++}
+diff --git a/skills/lens-review/scripts/discover-plan-docs.mjs b/skills/lens-review/scripts/discover-plan-docs.mjs
+new file mode 100644
+index 0000000..7f0a55c
+--- /dev/null
++++ b/skills/lens-review/scripts/discover-plan-docs.mjs
+@@ -0,0 +1,40 @@
++// Finds the plan or intent docs for the work a PR implements: the ones the PR itself adds or
++// changes (a plan usually ships on the branch that carries it out), plus any the caller
++// passes with --plan. Only those, not every design doc in the repo: a plan for some other
++// feature would only spend the reviewers' context. A reviewer without the plan can't tell
++// that this PR overtakes a sibling milestone, or that it does exactly what the plan asked.
++//
++//   node discover-plan-docs.mjs --files <files.txt> [--plan <path>]...
++//     → JSON array of paths on stdout, the passed ones first
++import fs from 'node:fs'
++import { fail, isRunDirectly, readTextFile } from './lib/cli.mjs'
++
++const PLAN_DOC_RE = /(^|\/)(intent|tech-design[\w.-]*|design[\w.-]*|plan[\w.-]*|spec[\w.-]*)\.md$/i
++
++export function isPlanDoc(file) {
++  return PLAN_DOC_RE.test(file)
++}
++
++export function discoverPlanDocs(changedFiles, passedPlans) {
++  return [...new Set([...passedPlans, ...changedFiles.filter(isPlanDoc)])]
++}
++
++function parseArgs(argv) {
++  const passedPlans = []
++  let filesPath = null
++  for (let index = 0; index < argv.length; index++) {
++    if (argv[index] === '--files') filesPath = argv[++index]
++    else if (argv[index] === '--plan') passedPlans.push(argv[++index])
++    else fail(`unknown argument: ${argv[index]}`)
++  }
++  return { filesPath, passedPlans }
++}
++
++if (isRunDirectly(import.meta.url)) {
++  const { filesPath, passedPlans } = parseArgs(process.argv.slice(2))
++  if (!filesPath) fail('usage: discover-plan-docs.mjs --files <files.txt> [--plan <path>]...')
++  const missingPlan = passedPlans.find(plan => !plan || !fs.existsSync(plan))
++  if (missingPlan !== undefined) fail(`plan doc not found: ${missingPlan}`)
++  const changedFiles = readTextFile(filesPath).split('\n').filter(Boolean)
++  console.log(JSON.stringify(discoverPlanDocs(changedFiles, passedPlans), null, 2))
++}
+diff --git a/skills/lens-review/scripts/merge-findings.mjs b/skills/lens-review/scripts/merge-findings.mjs
+index ecf924b..6f0e6a8 100644
+--- a/skills/lens-review/scripts/merge-findings.mjs
++++ b/skills/lens-review/scripts/merge-findings.mjs
+@@ -1,5 +1,6 @@
+ // Merges the reviewer agents' findings into one list: the same issue flagged by several
+-// reviewers becomes one finding with the highest severity and every reviewer's name.
++// reviewers becomes one finding with the highest severity and every reviewer's name, and
++// one duplicated helper flagged at each of its copies becomes one finding listing them all.
+ // Findings that don't point into the diff under review are dropped, not merged.
+ //
+ //   node merge-findings.mjs --diff <diff.patch> <findings.json>...   → merged JSON array on stdout
+@@ -104,6 +105,57 @@ function higherSeverity(first, second) {
+   return SEVERITIES.indexOf(first) <= SEVERITIES.indexOf(second) ? first : second
+ }
+ 
++const DUPLICATION_CATEGORY = 'duplication'
++// camelCase and snake_case code names: how a description names the helper it says is copied.
++const HELPER_NAME_RE = /\b(?:[a-z][a-z0-9]*[A-Z]\w*|[a-z][a-z0-9]*_[a-z0-9_]+)\b/g
++
++// What ties duplication findings into one issue: a file they share (where a copy sits, or
++// the existing code it copies) or a helper they both name. A helper copied into three files
++// is one fix, so it becomes one finding that lists every copy, not one comment per copy.
++function duplicationKeys(finding) {
++  const files = [finding.file, finding.duplicates?.split(':')[0].replace(/^\.\//, '')].filter(Boolean)
++  const helpers = finding.description.match(HELPER_NAME_RE) ?? []
++  return [...files.map(file => `file:${file}`), ...helpers.map(helper => `helper:${helper}`)]
++}
++
++function toLocation({ file, line, duplicates, description }) {
++  return { file, line, ...(duplicates && { duplicates }), description }
++}
++
++function foldDuplicationGroup(group) {
++  const [first, ...rest] = group
++  if (rest.length === 0) return first
++  return {
++    ...first,
++    severity: rest.reduce((severity, finding) => higherSeverity(severity, finding.severity), first.severity),
++    reviewers: [...new Set(group.flatMap(finding => finding.reviewers))],
++    duplicates: group.find(finding => finding.duplicates)?.duplicates,
++    locations: group.map(toLocation),
++  }
++}
++
++// Folds each connected group of duplication findings into its earliest one. Unlike the
++// same-line merge, one reviewer's findings fold together too: it flags each copy separately.
++function mergeDuplication(findings) {
++  const groups = []
++  const groupByKey = new Map()
++  for (const finding of findings) {
++    if (normalizeCategory(finding.category) !== DUPLICATION_CATEGORY) {
++      groups.push([finding])
++      continue
++    }
++    const linkedGroups = [...new Set(duplicationKeys(finding).map(key => groupByKey.get(key)).filter(Boolean))]
++    const group = [...linkedGroups.flat(), finding].sort((first, second) => findings.indexOf(first) - findings.indexOf(second))
++    for (const linkedGroup of linkedGroups) groups.splice(groups.indexOf(linkedGroup), 1)
++    groups.push(group)
++    for (const member of group) for (const key of duplicationKeys(member)) groupByKey.set(key, group)
++  }
++  return groups
++    .sort((first, second) => findings.indexOf(first[0]) - findings.indexOf(second[0]))
++    .map(foldDuplicationGroup)
++    .map((finding, index) => ({ ...finding, id: `F${index + 1}` }))
++}
++
+ export function mergeFindings(findingsPerReviewer, diffLines) {
+   const findings = []
+   const dropped = []
+@@ -125,21 +177,25 @@ export function mergeFindings(findingsPerReviewer, diffLines) {
+       findings.push({ id: `F${findings.length + 1}`, ...issue, reviewers: [reviewer] })
+     }
+   }
+-  return { findings, dropped }
++  return { findings: mergeDuplication(findings), dropped }
+ }
+ 
+-if (isRunDirectly(import.meta.url)) {
+-  const usage = 'usage: merge-findings.mjs --diff <diff.patch> <findings.json>...'
+-  const [flag, diffPath, ...findingsPaths] = process.argv.slice(2)
+-  if (flag !== '--diff' || !diffPath) fail(`${usage} (--diff is required: findings are checked against it)`)
+-  if (findingsPaths.length === 0) fail(`${usage} (no findings files given)`)
++export function readDiffLines(diffPath) {
+   const patchText = readTextFile(diffPath)
+   // Every path below is matched against the b/ side; a patch without prefixes would silently
+   // drop every finding as "not a file this diff changes".
+   if (/^\+\+\+ (?!b\/|\/dev\/null)/m.test(patchText)) {
+     fail(`${diffPath} has file headers without the b/ prefix; regenerate it with --src-prefix=a/ --dst-prefix=b/`)
+   }
+-  const diffLines = parseDiffLines(patchText)
++  return parseDiffLines(patchText)
++}
++
++if (isRunDirectly(import.meta.url)) {
++  const usage = 'usage: merge-findings.mjs --diff <diff.patch> <findings.json>...'
++  const [flag, diffPath, ...findingsPaths] = process.argv.slice(2)
++  if (flag !== '--diff' || !diffPath) fail(`${usage} (--diff is required: findings are checked against it)`)
++  if (findingsPaths.length === 0) fail(`${usage} (no findings files given)`)
++  const diffLines = readDiffLines(diffPath)
+   const { findings, dropped } = mergeFindings(findingsPaths.map(readJsonArrayFile), diffLines)
+   reportDropped('findings', dropped)
+   console.log(JSON.stringify(findings, null, 2))
+diff --git a/skills/lens-review/scripts/parse-reply.mjs b/skills/lens-review/scripts/parse-reply.mjs
+index ba00d89..f93e54e 100644
+--- a/skills/lens-review/scripts/parse-reply.mjs
++++ b/skills/lens-review/scripts/parse-reply.mjs
+@@ -3,9 +3,15 @@
+ // every run, keeps "is this reviewer failed?" from depending on the orchestrator's judgement.
+ // Anything else that isn't JSON fails, and the caller counts that agent as failed.
+ //
+-//   node parse-reply.mjs <reply.txt> <out.json>   → writes out.json; non-zero exit when not JSON
++// With --default-reviewer the reply must be a findings array, and a finding that leaves out
++// `reviewer` is credited to the agent the caller names: the caller knows who wrote the reply,
++// so a missing field is no reason to lose a finding. merge-findings.mjs still drops the ones
++// that are actually malformed.
++//
++//   node parse-reply.mjs <reply.txt> <out.json> [--default-reviewer <name>]
++//     → writes out.json; non-zero exit when not JSON (with the flag: not a JSON array)
+ import fs from 'node:fs'
+-import { fail, isRunDirectly, readTextFile } from './lib/cli.mjs'
++import { fail, isRunDirectly } from './lib/cli.mjs'
+ 
+ const WHOLE_REPLY_FENCE = /^```[\w-]*\n([\s\S]*?)\n```$/
+ 
+@@ -14,14 +20,43 @@ export function unfence(replyText) {
+   return trimmed.match(WHOLE_REPLY_FENCE)?.[1] ?? trimmed
+ }
+ 
+-if (isRunDirectly(import.meta.url)) {
+-  const [replyPath, outPath] = process.argv.slice(2)
+-  if (!replyPath || !outPath) fail('usage: parse-reply.mjs <reply.txt> <out.json>')
++function hasReviewer(finding) {
++  return typeof finding.reviewer === 'string' && finding.reviewer.length > 0
++}
++
++export function withDefaultReviewer(findings, reviewer) {
++  return findings.map(finding =>
++    finding && typeof finding === 'object' && !hasReviewer(finding) ? { ...finding, reviewer } : finding,
++  )
++}
++
++// Throws a message naming the reply when it is missing or can't be used.
++export function parseReply(replyPath, { defaultReviewer = null } = {}) {
+   let parsed
+   try {
+-    parsed = JSON.parse(unfence(readTextFile(replyPath)))
++    parsed = JSON.parse(unfence(fs.readFileSync(replyPath, 'utf8')))
++  } catch (error) {
++    throw new Error(`${replyPath} is not a JSON reply (a single surrounding code fence is the only wrapper allowed): ${error.message}`)
++  }
++  if (defaultReviewer === null) return parsed
++  if (!Array.isArray(parsed)) throw new Error(`${replyPath} is not a JSON array of findings`)
++  return withDefaultReviewer(parsed, defaultReviewer)
++}
++
++export function writeJson(outPath, value) {
++  fs.writeFileSync(outPath, `${JSON.stringify(value, null, 2)}\n`)
++}
++
++if (isRunDirectly(import.meta.url)) {
++  const usage = 'usage: parse-reply.mjs <reply.txt> <out.json> [--default-reviewer <name>]'
++  const [replyPath, outPath, ...flags] = process.argv.slice(2)
++  if (!replyPath || !outPath) fail(usage)
++  const flagIndex = flags.indexOf('--default-reviewer')
++  const defaultReviewer = flagIndex === -1 ? null : flags[flagIndex + 1]
++  if (flagIndex !== -1 && !defaultReviewer) fail(`${usage} (--default-reviewer needs a name)`)
++  try {
++    writeJson(outPath, parseReply(replyPath, { defaultReviewer }))
+   } catch (error) {
+-    fail(`${replyPath} is not a JSON reply (a single surrounding code fence is the only wrapper allowed): ${error.message}`)
++    fail(error.message)
+   }
+-  fs.writeFileSync(outPath, `${JSON.stringify(parsed, null, 2)}\n`)
+ }
+diff --git a/skills/lens-review/team/data-steward.md b/skills/lens-review/team/data-steward.md
+index 691c646..e427dd6 100644
+--- a/skills/lens-review/team/data-steward.md
++++ b/skills/lens-review/team/data-steward.md
+@@ -19,4 +19,5 @@ Rules:
+ - [should] A new query filters or sorts on indexed columns; flag a new access pattern with no supporting index.
+ - [should] A schema change that needs existing rows updated ships a backfill, and the code tolerates both old and new shapes while it runs.
+ - [should] Destructive changes (dropping a column or table, narrowing a type) are deployed after the code stops using them.
++- [must] A new migration's timestamp sorts after every migration already merged and before none that is planned or still unmerged; check the migrations directory and the plan docs. A later timestamp that ships first makes migration tools refuse or skip the earlier one.
+ - Do not flag application code outside data access.
+diff --git a/tests/lens-review-scripts.test.mjs b/tests/lens-review-scripts.test.mjs
+index 70f6a28..568c04a 100644
+--- a/tests/lens-review-scripts.test.mjs
++++ b/tests/lens-review-scripts.test.mjs
+@@ -443,6 +443,103 @@ describe('merge-findings.mjs', () => {
+   })
+ })
+ 
++describe('merge-findings.mjs: duplication across copies', () => {
++  // Modelled on a real run: three e2e specs each re-declare helpers that an existing spec
++  // already has, and a migration copies an older function body. Two reviewers flagged every
++  // copy separately, which put seven near-identical comments on the PR.
++  const SPECS_DIFF = [
++    diffSection('e2e/second-parent.spec.ts', Array(80).fill('+x')),
++    diffSection('e2e/names-and-seats.spec.ts', Array(120).fill('+x')),
++    diffSection('e2e/standing-drives.spec.ts', Array(80).fill('+x')),
++    diffSection('supabase/migrations/2_drives.sql', Array(60).fill('+x')),
++  ].join('')
++  const copyFindings = {
++    generic: [
++      duplication('e2e/second-parent.spec.ts', 21, 'childButton and enterAs are redefined here and in two other specs.', { reviewer: 'Generic' }),
++      duplication('e2e/names-and-seats.spec.ts', 88, 'addFamily repeats the join_group call second-parent.spec.ts writes inline.', { reviewer: 'Generic', severity: 'suggestion' }),
++    ],
++    reuseScout: [
++      duplication('e2e/second-parent.spec.ts', 21, 'childButton and enterAs copy the invite helpers.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
++      duplication('supabase/migrations/2_drives.sql', 31, 'ensure_practices re-defines the init body.', { duplicates: 'supabase/migrations/1_init.sql:377', severity: 'must' }),
++      duplication('e2e/names-and-seats.spec.ts', 94, 'childButton is defined again with the same selector.', { duplicates: 'e2e/invite-link-access.spec.ts:27' }),
++      duplication('e2e/second-parent.spec.ts', 16, 'childButton is a third copy of the pick-child selector.', { duplicates: 'e2e/invite-link-access.spec.ts:27' }),
++      duplication('e2e/names-and-seats.spec.ts', 98, 'enterAs repeats the open-invite steps.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
++      duplication('e2e/standing-drives.spec.ts', 60, 'enterAs is a third copy of the open-invite steps.', { duplicates: 'e2e/invite-link-access.spec.ts:36' }),
++      duplication('e2e/second-parent.spec.ts', 55, 'The inline join_group call repeats the addFamily helper.', { duplicates: 'e2e/names-and-seats.spec.ts:83' }),
++    ],
++  }
++  let mergeFindings
++  let specsDiffLines
++
++  function duplication(file, line, description, overrides = {}) {
++    return finding({ file, line, category: 'duplication', description, reviewer: 'The Reuse Scout', ...overrides })
++  }
++
++  beforeEach(async () => {
++    let parseDiffLines
++    ;({ mergeFindings, parseDiffLines } = await import(MERGE_FINDINGS))
++    specsDiffLines = parseDiffLines(SPECS_DIFF)
++  })
++
++  test('folds every copy of the duplicated helpers into one finding that lists each location', () => {
++    const { findings, dropped } = mergeFindings([copyFindings.generic, copyFindings.reuseScout], specsDiffLines)
++    assert.deepEqual(dropped, [])
++    const specCopies = findings.filter(merged => merged.file.startsWith('e2e/'))
++    assert.equal(specCopies.length, 1)
++    const [helpers] = specCopies
++    assert.deepEqual(
++      helpers.locations.map(({ file, line }) => `${file}:${line}`),
++      [
++        'e2e/second-parent.spec.ts:21',
++        'e2e/names-and-seats.spec.ts:88',
++        'e2e/names-and-seats.spec.ts:94',
++        'e2e/second-parent.spec.ts:16',
++        'e2e/names-and-seats.spec.ts:98',
++        'e2e/standing-drives.spec.ts:60',
++        'e2e/second-parent.spec.ts:55',
++      ],
++    )
++    assert.deepEqual(helpers.reviewers, ['Generic', 'The Reuse Scout'])
++    assert.equal(helpers.severity, 'should')
++    assert.equal(helpers.duplicates, 'e2e/invite-link-access.spec.ts:36')
++  })
++
++  test('keeps a duplication that shares no file and no helper with the others as its own finding', () => {
++    const { findings } = mergeFindings([copyFindings.generic, copyFindings.reuseScout], specsDiffLines)
++    const migrationCopy = findings.find(merged => merged.file === 'supabase/migrations/2_drives.sql')
++    assert.equal(migrationCopy.severity, 'must')
++    assert.equal(migrationCopy.locations, undefined)
++    assert.deepEqual(findings.map(merged => merged.id), ['F1', 'F2'])
++  })
++
++  test('links copies through a helper they both name, even in files nothing else shares', () => {
++    const { findings } = mergeFindings(
++      [
++        [
++          duplication('e2e/second-parent.spec.ts', 10, 'formatSeat repeats the seat label logic.'),
++          duplication('e2e/standing-drives.spec.ts', 10, 'A second formatSeat copy.'),
++        ],
++      ],
++      specsDiffLines,
++    )
++    assert.equal(findings.length, 1)
++    assert.equal(findings[0].locations.length, 2)
++  })
++
++  test('never folds findings of another category, even when they name the same helper', () => {
++    const { findings } = mergeFindings(
++      [
++        [
++          duplication('e2e/second-parent.spec.ts', 10, 'formatSeat repeats the seat label logic.'),
++          finding({ file: 'e2e/standing-drives.spec.ts', line: 10, category: 'correctness', description: 'formatSeat drops the last seat.' }),
++        ],
++      ],
++      specsDiffLines,
++    )
++    assert.equal(findings.length, 2)
++  })
++})
++
+ describe('discover-rule-sources.mjs', () => {
+   let discoverRuleSources
+   let repoDir
+@@ -975,11 +1072,11 @@ describe('parse-reply.mjs', () => {
+     replyDir = makeTempDir('agent-reply')
+   })
+ 
+-  function parseReply(replyText) {
++  function parseReply(replyText, flags = []) {
+     const replyPath = path.join(replyDir, 'reply.txt')
+     const outPath = path.join(replyDir, 'findings.json')
+     fs.writeFileSync(replyPath, replyText)
+-    const result = runScript('node', [PARSE_REPLY, replyPath, outPath])
++    const result = runScript('node', [PARSE_REPLY, replyPath, outPath, ...flags])
+     return { result, outPath }
+   }
+ 
+@@ -997,6 +1094,31 @@ describe('parse-reply.mjs', () => {
+     }
+   })
+ 
++  test('--default-reviewer credits a finding with no reviewer to the agent that wrote the reply', () => {
++    // The Maintainer's reply in the carpool #13 run: valid findings, no `reviewer` on any of them.
++    const reply = JSON.stringify([
++      { file: 'README.md', line: 188, severity: 'should', category: 'maintainability', description: 'The runbook misdescribes the seed refusal.' },
++      { file: 'e2e/a.spec.ts', line: 160, severity: 'suggestion', category: 'maintainability', description: 'Misleading name.', reviewer: 'The Architect' },
++    ])
++    const { result, outPath } = parseReply(reply, ['--default-reviewer', 'The Maintainer'])
++    assert.equal(result.status, 0, result.stderr)
++    const findings = JSON.parse(fs.readFileSync(outPath, 'utf8'))
++    assert.deepEqual(findings.map(written => written.reviewer), ['The Maintainer', 'The Architect'])
++  })
++
++  test('--default-reviewer refuses a reply that is not a findings array, so the agent counts as failed', () => {
++    const { result, outPath } = parseReply('{"persona": "X", "votes": []}', ['--default-reviewer', 'The Maintainer'])
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /reply\.txt is not a JSON array of findings/)
++    assert.ok(!fs.existsSync(outPath))
++  })
++
++  test('--default-reviewer without a name fails with usage', () => {
++    const { result } = parseReply('[]', ['--default-reviewer'])
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /needs a name/)
++  })
++
+   test('fails loudly, naming the reply, and writes nothing when the reply is not JSON', () => {
+     for (const notJson of ['Here are my findings:\n```json\n[]\n```', 'I found no issues.', '```json\n[{"file": \n```']) {
+       const { result, outPath } = parseReply(notJson)
+@@ -1073,6 +1195,21 @@ describe('build-pr-review.mjs', () => {
+     assert.match(review.comments[0].body, /Duplicates `src\/utils\/money\.ts:4`/)
+   })
+ 
++  test('posts a merged duplication once, listing every copy it stands for', () => {
++    const locations = [
++      { file: 'src/api.ts', line: 10, duplicates: 'src/utils/money.ts:4', description: 'formatMoney copy' },
++      { file: 'src/components/Checkout.tsx', line: 3, description: 'Another formatMoney copy' },
++    ]
++    const review = buildPrReview({
++      findings: [finalFinding({ category: 'duplication', duplicates: 'src/utils/money.ts:4', locations })],
++      diffLines,
++      summary: SUMMARY,
++      commitId: HEAD_SHA,
++    })
++    assert.equal(review.comments.length, 1)
++    assert.match(review.comments[0].body, /Every copy:\n- `src\/api\.ts:10` \(duplicates `src\/utils\/money\.ts:4`\)\n- `src\/components\/Checkout\.tsx:3`/)
++  })
++
+   test('keeps reviewer names off the PR', () => {
+     const review = buildPrReview({ findings: [finalFinding({ reviewer: 'The Reuse Scout' })], diffLines, summary: SUMMARY, commitId: HEAD_SHA })
+     assert.doesNotMatch(JSON.stringify(review), /Reuse Scout/)
+@@ -1143,3 +1280,190 @@ describe('build-pr-review.mjs', () => {
+     assert.match(result.stderr, /missing\.md/)
+   })
+ })
++
++describe('collect-findings.mjs', () => {
++  const COLLECT_FINDINGS = path.join(SCRIPTS_DIR, 'collect-findings.mjs')
++  let runDir
++
++  beforeEach(() => {
++    runDir = makeTempDir('collect-findings')
++    fs.writeFileSync(path.join(runDir, 'diff.patch'), DIFF_PATCH)
++  })
++
++  function collect(...agentArgs) {
++    return runScript('node', [COLLECT_FINDINGS, runDir, ...agentArgs])
++  }
++
++  test('parses every reply, credits a finding with no reviewer to its agent, and merges them in one call', () => {
++    const { reviewer, ...withoutReviewer } = finding({ line: 40 })
++    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
++    fs.writeFileSync(path.join(runDir, 'reply-maintainer.txt'), '```json\n' + JSON.stringify([withoutReviewer]) + '\n```')
++    const result = collect('anthropic=Anthropic', 'maintainer=The Maintainer')
++    assert.equal(result.status, 0, result.stderr)
++    assert.deepEqual(JSON.parse(result.stdout), { failedReviewers: [], droppedFindings: 0, findings: 2 })
++    const merged = JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8'))
++    assert.deepEqual(merged.map(written => written.reviewers), [['Anthropic'], ['The Maintainer']])
++    assert.ok(fs.existsSync(path.join(runDir, 'findings-maintainer.json')))
++  })
++
++  test('lists a reviewer whose reply is missing or not a findings array as failed, and merges the rest', () => {
++    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
++    fs.writeFileSync(path.join(runDir, 'reply-architect.txt'), 'I found no issues.')
++    const result = collect('anthropic=Anthropic', 'architect=The Architect', 'reuse-scout=The Reuse Scout')
++    assert.equal(result.status, 0, result.stderr)
++    assert.deepEqual(JSON.parse(result.stdout).failedReviewers, ['The Architect', 'The Reuse Scout'])
++    assert.match(result.stderr, /failed reviewer: .*reply-reuse-scout\.txt/)
++    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8')).length, 1)
++  })
++
++  test('still drops a finding outside the diff, and counts it', () => {
++    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ file: 'src/untouched.ts' })]))
++    const result = collect('anthropic=Anthropic')
++    assert.equal(result.status, 0, result.stderr)
++    assert.equal(JSON.parse(result.stdout).droppedFindings, 1)
++  })
++
++  test('fails with usage on an agent argument that is not <stem>=<reviewer>', () => {
++    const result = collect('anthropic')
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /"anthropic" is not <stem>=<reviewer name>/)
++  })
++
++  test('fails naming the diff when the run dir has none', () => {
++    fs.rmSync(path.join(runDir, 'diff.patch'))
++    const result = collect('anthropic=Anthropic')
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /diff\.patch/)
++  })
++})
++
++describe('collect-votes.mjs', () => {
++  const COLLECT_VOTES = path.join(SCRIPTS_DIR, 'collect-votes.mjs')
++  let runDir
++
++  beforeEach(() => {
++    runDir = makeTempDir('collect-votes')
++    const { reviewer, ...issue } = finding({})
++    fs.writeFileSync(path.join(runDir, 'merged.json'), JSON.stringify([{ id: 'F1', ...issue, reviewers: [reviewer] }]))
++  })
++
++  test('parses every ballot and tallies them into tallied.json in one call', () => {
++    fs.writeFileSync(path.join(runDir, 'reply-votes-architect.txt'), JSON.stringify({ persona: 'The Architect', votes: [{ id: 'F1', verdict: 'dispute', reason: 'Awaited upstream' }] }))
++    const result = runScript('node', [COLLECT_VOTES, runDir, 'architect'])
++    assert.equal(result.status, 0, result.stderr)
++    assert.deepEqual(JSON.parse(result.stdout), { voted: 1, failedVoters: [], contested: 1, droppedVotes: 0 })
++    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'tallied.json'), 'utf8'))[0].contested, true)
++  })
++
++  test('counts a persona with no ballot file as a failed voter and tallies the rest', () => {
++    const result = runScript('node', [COLLECT_VOTES, runDir, 'architect'])
++    assert.equal(result.status, 0, result.stderr)
++    assert.deepEqual(JSON.parse(result.stdout).failedVoters, ['architect'])
++    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'tallied.json'), 'utf8'))[0].contested, false)
++  })
++
++  test('fails naming merged.json when it is missing', () => {
++    fs.rmSync(path.join(runDir, 'merged.json'))
++    const result = runScript('node', [COLLECT_VOTES, runDir])
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /merged\.json/)
++  })
++})
++
++describe('apply-skeptic.mjs', () => {
++  const APPLY_SKEPTIC = path.join(SCRIPTS_DIR, 'apply-skeptic.mjs')
++  let runDir
++
++  beforeEach(() => {
++    runDir = makeTempDir('apply-skeptic')
++    const { reviewer, ...issue } = finding({})
++    const tallied = ['F1', 'F2'].map(id => ({ id, ...issue, reviewers: [reviewer], challenge: { agree: [], dispute: [] }, contested: false }))
++    fs.writeFileSync(path.join(runDir, 'tallied.json'), JSON.stringify(tallied))
++  })
++
++  function applySkeptic(reply) {
++    if (reply !== undefined) fs.writeFileSync(path.join(runDir, 'reply-skeptic.txt'), reply)
++    return runScript('node', [APPLY_SKEPTIC, runDir])
++  }
++
++  test('keeps only the findings the skeptic kept, unchanged, with its ruling attached', () => {
++    const result = applySkeptic(JSON.stringify([
++      { id: 'F1', verdict: 'keep', reason: 'Line 10 drops the promise.' },
++      { id: 'F2', verdict: 'drop', reason: 'Awaited by the caller.' },
++    ]))
++    assert.equal(result.status, 0, result.stderr)
++    assert.deepEqual(JSON.parse(result.stdout), { kept: 1, dropped: 1 })
++    const [kept, ...rest] = JSON.parse(fs.readFileSync(path.join(runDir, 'final-findings.json'), 'utf8'))
++    assert.deepEqual(rest, [])
++    assert.equal(kept.id, 'F1')
++    assert.deepEqual(kept.skeptic, { verdict: 'keep', reason: 'Line 10 drops the promise.' })
++    assert.deepEqual(kept.challenge, { agree: [], dispute: [] })
++  })
++
++  test('fails naming every id the skeptic did not rule on, and writes no final findings', () => {
++    const result = applySkeptic(JSON.stringify([{ id: 'F1', verdict: 'maybe', reason: '?' }]))
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /no keep\/drop verdict for F1, F2/)
++    assert.ok(!fs.existsSync(path.join(runDir, 'final-findings.json')))
++  })
++
++  test('fails naming the reply when the skeptic wrote none', () => {
++    const result = applySkeptic()
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /reply-skeptic\.txt/)
++  })
++
++  test('with no findings to rule on, writes an empty review without needing a skeptic reply', () => {
++    fs.writeFileSync(path.join(runDir, 'tallied.json'), '[]')
++    const result = applySkeptic()
++    assert.equal(result.status, 0, result.stderr)
++    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runDir, 'final-findings.json'), 'utf8')), [])
++  })
++})
++
++describe('discover-plan-docs.mjs', () => {
++  const DISCOVER_PLAN_DOCS = path.join(SCRIPTS_DIR, 'discover-plan-docs.mjs')
++  let inputDir
++  let filesPath
++
++  beforeEach(() => {
++    inputDir = makeTempDir('plan-docs')
++    filesPath = path.join(inputDir, 'files.txt')
++    fs.writeFileSync(
++      filesPath,
++      ['docs/tech-design-names-parents-seats.md', 'supabase/migrations/20261024000001_standing_drives.sql', 'README.md', 'src/plan.ts', 'tasks/x/INTENT.md'].join('\n'),
++    )
++  })
++
++  test('finds the plan and intent docs the PR changes, and nothing else', () => {
++    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
++    assert.equal(result.status, 0, result.stderr)
++    assert.deepEqual(JSON.parse(result.stdout), ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
++  })
++
++  test('puts a plan the caller passes first, and lists each path once', () => {
++    const passedPlan = path.join(inputDir, 'tech-design.md')
++    fs.writeFileSync(passedPlan, '# Plan\n')
++    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', passedPlan, '--plan', passedPlan])
++    assert.equal(result.status, 0, result.stderr)
++    assert.deepEqual(JSON.parse(result.stdout), [passedPlan, 'docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
++  })
++
++  test('returns [] for a PR that changes no plan doc', () => {
++    fs.writeFileSync(filesPath, 'src/a.ts\n')
++    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
++    assert.deepEqual(JSON.parse(result.stdout), [])
++  })
++
++  test('fails naming a passed plan that does not exist, rather than reviewing without it', () => {
++    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', '/nonexistent/tech-design.md'])
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /plan doc not found: \/nonexistent\/tech-design\.md/)
++  })
++
++  test('fails with usage when --files is missing', () => {
++    const result = runScript('node', [DISCOVER_PLAN_DOCS])
++    assert.notEqual(result.status, 0)
++    assert.match(result.stderr, /usage: discover-plan-docs\.mjs/)
++  })
++})
+diff --git a/tests/lens-review.test.mjs b/tests/lens-review.test.mjs
+index f5e6853..70d6996 100644
+--- a/tests/lens-review.test.mjs
++++ b/tests/lens-review.test.mjs
+@@ -99,6 +99,10 @@ describe('skill layout', () => {
+       'scripts/validate-team.mjs',
+       'scripts/select-team.mjs',
+       'scripts/build-pr-review.mjs',
++      'scripts/collect-findings.mjs',
++      'scripts/collect-votes.mjs',
++      'scripts/apply-skeptic.mjs',
++      'scripts/discover-plan-docs.mjs',
+       'checklist.md',
+       'casting-prompt.md',
+       'challenge-prompt.md',
+@@ -136,16 +140,27 @@ describe('skill layout', () => {
+     }
+   })
+ 
+-  test('every agent prompt forbids a code fence, and every reply goes through parse-reply.mjs', () => {
++  test('every agent writes its own reply file, with no code fence, and every reply goes through parse-reply.mjs', () => {
+     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+-    for (const [name, text] of [['SKILL.md', skill], ['casting-prompt.md', readText(CASTING_PROMPT)], ['challenge-prompt.md', readText(CHALLENGE_PROMPT)]]) {
+-      for (const returnLine of text.match(/^Return ONLY.*$/gm)) {
+-        assert.match(returnLine, /no code fence/, `${name}: "${returnLine}"`)
++    const prompts = [['SKILL.md', skill, 3], ['casting-prompt.md', readText(CASTING_PROMPT), 1], ['challenge-prompt.md', readText(CHALLENGE_PROMPT), 1]]
++    for (const [name, text, agentCount] of prompts) {
++      assert.doesNotMatch(text, /^Return ONLY/m, `${name}: an agent still hands its JSON back in its message`)
++      const writeLines = text.match(/^Write ONLY.*$/gm) ?? []
++      assert.equal(writeLines.length, agentCount, `${name}: expected ${agentCount} reply instructions`)
++      for (const writeLine of writeLines) {
++        assert.match(writeLine, /to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence/, `${name}: "${writeLine}"`)
+       }
+     }
+-    for (const output of ['findings-<agent>.json', 'votes-<persona-file-stem>.json', 'skeptic.json', 'cast.json']) {
+-      assert.match(skill, new RegExp(`parse-reply\\.mjs" "[^"]+" "<RUN_DIR>/${output.replace(/[.<>]/g, '\\$&')}"`), `${output} is not written by parse-reply.mjs`)
+-    }
++    assert.match(skill, /never copy a reply out of an agent's message or transcript/)
++    assert.match(skill, /parse-reply\.mjs" "<RUN_DIR>\/reply-cast\.txt" "<RUN_DIR>\/cast\.json"/, 'cast.json is not written by parse-reply.mjs')
++  })
++
++  test('runs each phase\'s deterministic tail as one script call, never by hand', () => {
++    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
++    assert.match(skill, /scripts\/collect-findings\.mjs" "<RUN_DIR>" "anthropic=Anthropic"/)
++    assert.match(skill, /scripts\/collect-votes\.mjs" "<RUN_DIR>"/)
++    assert.match(skill, /scripts\/apply-skeptic\.mjs" "<RUN_DIR>"/)
++    assert.doesNotMatch(skill, /final-findings\.json` with `Write`/, 'final-findings.json must come from a script')
+   })
+ 
+   test("the skeptic rules on each finding's own merits and never drops one for repeating another", () => {
+@@ -154,10 +169,39 @@ describe('skill layout', () => {
+     assert.match(skepticPrompt, /Never drop a finding because another finding repeats it/)
+   })
+ 
++  test('the skeptic reads the plan and drops a finding that objects to what the plan requires', () => {
++    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
++    const skepticPrompt = skill.slice(skill.indexOf('You are a skeptical senior engineer.'), skill.indexOf('<<<TALLIED_FINDINGS_JSON>>>'))
++    assert.ok(skepticPrompt.includes('<<<PLAN_DOCS>>>'))
++    assert.match(skepticPrompt, /Does the plan or design doc this PR implements require what the finding objects to\?/)
++  })
++
++  test('runs one general reviewer, which also covers test strength, with no second generic one', () => {
++    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
++    assert.doesNotMatch(skill, /Generic-PR/)
++    const generalPrompt = skill.slice(skill.indexOf('### A. Anthropic-general reviewer'), skill.indexOf('### B. '))
++    assert.match(generalPrompt, /Tests that pass for the wrong reason/)
++    assert.match(generalPrompt, /reviewer: "Anthropic"/)
++  })
++
++  test('keeps role framing only where it steers: the skeptic\'s stance and each persona\'s name', () => {
++    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
++    const generalPrompt = skill.slice(skill.indexOf('### A. Anthropic-general reviewer'), skill.indexOf('### B. '))
++    assert.doesNotMatch(generalPrompt, /You are a senior/)
++    assert.match(skill, /^You are <<<PERSONA_NAME>>>, one reviewer on a team\./m)
++    assert.match(skill, /^You are a skeptical senior engineer\./m)
++  })
++
+   test('never assigns Sonnet to any step', () => {
+     assert.doesNotMatch(readText(path.join(SKILL_DIR, 'SKILL.md')), /sonnet/i)
+   })
+ 
++  test('has no dollar sign before a digit, which Claude Code replaces with a skill argument', () => {
++    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
++    const argumentPlaceholders = skill.split('\n').filter(line => /\$\d/.test(line))
++    assert.deepEqual(argumentPlaceholders, [])
++  })
++
+   test('states its per-run cost budget', () => {
+     assert.match(readText(path.join(SKILL_DIR, 'SKILL.md')), /^## Cost/m)
+   })
+@@ -250,6 +294,20 @@ describe('team', () => {
+     assert.ok(postStep.includes(REVIEW_MARKER), 'the earlier-review check must look for the marker build-pr-review.mjs writes')
+   })
+ 
++  test('gives the plan docs to the Domain Expert and the Data Steward, whose findings depend on the plan', () => {
++    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
++    assert.match(skill, /scripts\/discover-plan-docs\.mjs" --files "<RUN_DIR>\/files\.txt"/)
++    const personaPrompt = skill.slice(skill.indexOf('### B. One persona agent'), skill.indexOf('**Collect.**'))
++    assert.ok(personaPrompt.includes('<<<PLAN_NOTE>>>'))
++    assert.match(personaPrompt, /the persona is The Domain Expert or The Data Steward/)
++  })
++
++  test('the Data Steward keeps migrations in order with the planned and unmerged ones', async () => {
++    const { parsePersona } = await import(VALIDATE_TEAM)
++    const { rules } = parsePersona(readText(path.join(TEAM_DIR, 'data-steward.md')))
++    assert.ok(rules.some(rule => rule.severity === 'must' && /timestamp sorts after every migration already merged and before none that is planned or still unmerged/.test(rule.text)))
++  })
++
+   test('has a challenge prompt that shows the team the merged findings', () => {
+     assert.ok(readText(CHALLENGE_PROMPT).includes('<<<MERGED_FINDINGS>>>'))
+   })

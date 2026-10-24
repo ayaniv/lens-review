@@ -1,0 +1,887 @@
+diff --git a/README.md b/README.md
+index 0c1cd43..0a2a4e9 100644
+--- a/README.md
++++ b/README.md
+@@ -34,7 +34,8 @@ and users named `*@carpool.test`.
+ ## Running the invite-link e2e
+ 
+ `e2e/invite-link-access.spec.ts` (the WhatsApp invite link `/join/<invite_token>`: pick your child and you're in)
+-and `e2e/open-picker.spec.ts` (the site address `/` itself opens the group's picker) run against the local Supabase
++and `e2e/open-picker.spec.ts` (the site address `/` itself opens the group's picker), plus
++`e2e/standing-drives.spec.ts` (each new week's cars come filled from the team's rota), run against the local Supabase
+ stack and are skipped without it. There is no login: a device signs in anonymously
+ when it picks, which `supabase/config.toml` turns on locally (`enable_anonymous_sign_ins`). After changing
+ `config.toml`, restart the stack (`supabase stop && supabase start`) for it to take effect.
+@@ -44,8 +45,8 @@ supabase start                              # needs Docker; applies every migrat
+ eval "$(supabase status -o env | grep -E '^(API_URL|ANON_KEY|SERVICE_ROLE_KEY)=')"
+ export E2E_SUPABASE_URL=$API_URL
+ export E2E_SUPABASE_ANON_KEY=$ANON_KEY
+-export E2E_SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY   # only seeds the two fixture groups
+-npx playwright test e2e/invite-link-access.spec.ts e2e/open-picker.spec.ts --workers=2
++export E2E_SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY   # only seeds the fixture groups
++npx playwright test e2e/invite-link-access.spec.ts e2e/open-picker.spec.ts e2e/standing-drives.spec.ts --workers=2
+ ```
+ 
+ With these set the dev server runs against Supabase, so run these specs on their own: every other spec expects the
+@@ -175,6 +176,26 @@ the next, so the live site keeps working in between):
+ 5. The smoke test against the real address (step 8), then step 9 on your own phone, then share the plain address
+    (step 10).
+ 
++**The team's families and standing drives** (once, after `20261024000001_standing_drives` is pushed), in the
++dashboard's SQL editor. Keep the real values there or in a file outside the repo, never in it:
++
++1. The group's areas, set to the team's neighbourhoods:
++   `update public.groups set areas = array['<area>', '<area>'];`
++2. Monday's times, as on the team's sheet (שם 15:15, שם 18:00; the production seed had 16:00 / 18:30):
++   `update public.schedule_slots set pickup_time = '15:15', departure_time = '18:00' where weekday = 1;`
++   A practice already shown (up to two weeks ahead) keeps the times it was created with; only later weeks get the new ones.
++3. Copy `supabase/families-seed.template.sql`, replace its placeholder rows with one row per family (family name,
++   child, area) and one per standing drive (child, weekday, שם/שם, שם 1/2), and run it. Every child needs one
++   of step 1's areas, or the seed stops naming that child and adds no one. Before running it, settle the children
++   the area list and the sheet disagree on: two of the sheet's children have no area yet, and one child in the area
++   list is not on the sheet. Running it again adds no second family: a child already in the group (for example one
++   whose parent joined through the link) keeps their family.
++
++From then on each new week's cars come with the rota's drivers. Weeks already shown when the seed ran keep their
++open cars, which families claim as before. A family that can't make one week releases that car as usual; it stays
++open. To change the rota itself, edit `public.standing_drives` in the SQL editor: it affects only weeks created
++after the change.
++
+ **Optional custom domain:** `vercel domains add <domain>`, set the DNS records it prints at your registrar, then
+ update Supabase's Site URL (step 7) and the link you share.
+ 
+diff --git a/docs/tech-design-names-parents-seats.md b/docs/tech-design-names-parents-seats.md
+new file mode 100644
+index 0000000..55bd5c3
+--- /dev/null
++++ b/docs/tech-design-names-parents-seats.md
+@@ -0,0 +1,45 @@
++# Edit names, two parents per child, max 6 seats
++
++**Author:** Yaniv Aharon (planned with Claude)  
++**Date:** 2026-10-23  
++**Branch:** `claude/carpool-names-parents-seats`
++
++## Summary
++
++Small fixes before the ~8 families register. Both parents of a child share one family: the picker lists each child once as "שם שם <child>", and any phone that taps it acts for that family, so the second parent never creates a duplicate. A parent can edit the family's name and the child's name in Preferences, and a car's seats top out at 6, where 6 means six seats instead of "6+ / unlimited". Last, the team's standing weekly drives (their sheet of who always drives which leg) are loaded once, so each new week's cars come already filled.
++
++## Context
++- **Second parent today:** tapping the child already binds the phone to the child's family (`claim_child` → `children.parent_id`), and that works. The trap is the label "שם <parent>": a second parent who doesn't see their own name uses "שם/שם שם שם שם", and `join_group` (deduped on parent name + child name) creates a duplicate child.
++- **Names:** no UI edits names. RLS already lets a phone update its own parent row's `display_name` (invite_link_access.sql). `children` has no update grant.
++- **Seats:** the DB already caps the value (`seats in (3,4,5,6)`, init.sql). Only the client is wrong: `SeatsChoice '6+'` maps to `Infinity` in `src/domain/seats.ts`.
++- Decided with the developer: no separate parent identities. A family is one parent row, and both parents' phones bind to it; who of the two actually drives a slot is the family's business.
++
++## Milestones
++- M0: Picker label, edit names, 6-seat cap — needs: none — est: 3h — spec: e2e/second-parent.spec.ts, e2e/names-and-seats.spec.ts
++- M1: Standing drives + families seed — needs: none — est: 4h — spec: e2e/standing-drives.spec.ts
++
++## M0 — Picker label, names, seats
++- **Picker:** `ChildPicker` labels each child **"שם שם <child>"** and drops the "שם <parent>" line (`he.auth.pick`). The flow is unchanged: one tap, `claim_child`. No migration for this part.
++- **Migration** `20261024000000_rename_child.sql`: `grant update (display_name) on children to authenticated`, plus a `children_update_own` policy using `parent_id = current_parent_id()`, with check `group_id = current_group_id()`. Parent names are already covered.
++- **Repository:** a new `renameFamily({ parentId, parentName, childId, childName })` in both the in-memory and Supabase repositories, covered by the shared contract. Supabase runs `update(...).select()` and throws when the update touches 0 rows, so an RLS-filtered rename can't fail silently. It goes through `logged()`.
++- **UI:** a "שם" card at the top of Preferences with `names-parent` and `names-child` inputs (max length `DISPLAY_NAME_MAX_LENGTH`). The existing שם saves the names when they changed, then the preferences. A failure shows the existing `preferences-save-error`. An empty name shows `names-error` in place and saves nothing. No new screen.
++- **Seats:** `SeatsChoice` becomes `'3'|'4'|'5'|'6'`, and `seatCapacity` returns `Number(seats)`. A new `MAX_SEATS = 6` constant also caps a driver with no preferences row; a car with no driver stays unlimited. The test id `seats-6+` becomes `seats-6`. `supabaseMapping` keeps mapping to the column's 6, so no data change is needed. Update QUESTIONS.md #6.
++
++## M1 — Standing drives + families seed
++The team's sheet is a fixed weekly rota: each family drives the same leg every week, with up to two cars per leg. App availability alone wouldn't fill cars, because drives are proposed only when a parent saves Preferences and the weekly auto-assign was deferred (QUESTIONS.md #24). So the rota gets its own table.
++- **Migration** `20261024000001_standing_drives.sql`: `standing_drives(group_id, parent_id, schedule_slot_id, direction, position)`. The PK is `(schedule_slot_id, direction, position)`, where position 0/1 is the sheet's שם 1/שם 2, and `unique (schedule_slot_id, direction, parent_id)` stops one family holding both cars of a leg. FKs cascade, and the parent FK is `(parent_id, group_id)` as elsewhere. RLS: read `group_id = current_group_id()`; writes revoked from anon and authenticated. Rows are written only by the developer's seed, in the SQL editor.
++- `create or replace ensure_practices`: same body, but its base-car insert left-joins `standing_drives` on the practice's slot, direction and position, and sets `driver_id`. That fills only the cars it *creates* (`on conflict do nothing`), so a car a family released for one week stays open, and nothing already in the database changes. Add to the realtime publication.
++- No in-app editor for the rota (out of scope). A family changes a single week with the existing release; the developer edits the table to change the rota.
++- **Families seed** `supabase/families-seed.template.sql`: a do-block filled with **placeholder** names. Real names are never committed (same rule as `production-seed.template.sql`). One row per family: family name, child name, child area. Then one row per standing drive: child name, weekday, direction, car 1/2. Idempotent per child name. A vitest case in the style of `productionSeed.test.ts` applies it to the migrated schema and asserts the families and the filled cars.
++- **README runbook (developer's steps):** set the hosted group's areas to the team's neighbourhoods. The developer has given them; they go only into the hosted SQL, never into the repo. Fix Monday's times in `schedule_slots`: the sheet has שם 15:15 / שם 18:00, the seed has 16:00 / 18:30. Fill and run the families seed. Every child in the seed needs an area; the list the developer gave misses two of the sheet's children and names one child the sheet doesn't have.
++
++## Security model (kept from PR #11)
++No new anon grants. A phone still binds only through the token's group (`claim_child`). It renames only its own family's parent row and children. Standing drives are read inside the group only and are never written by a phone.
++
++## Verification
++**Verifier:** `npm run verify`, which runs lint, typecheck, vitest, and Playwright excluding `@pending`.
++- Unit (vitest, written first in TDD): pglite `migration.test.ts` cases for renaming one's own vs another family's child (0 rows), the length check, `ensure_practices` filling only new cars, and standing drives being unwritable by a phone. Also `seatCapacity('6')`, the no-preferences cap, the repository contract for `renameFamily`, and the families seed test.
++- e2e (written now, tagged `@pending`): `e2e/second-parent.spec.ts`, `e2e/names-and-seats.spec.ts` and `e2e/standing-drives.spec.ts`. Their Supabase cases skip without the local stack (README "Running the invite-link e2e").
++
++## Upgrading an existing deploy (README addition, developer's steps)
++`supabase db push --dry-run` should list the two new migrations; then `supabase db push`, then redeploy. Then update the group's areas and Monday's times, and fill and run `families-seed.template.sql` in the hosted SQL editor. No new env vars or dashboard toggles.
+diff --git a/e2e/fixtures/authFixture.ts b/e2e/fixtures/authFixture.ts
+index 6d3a3a4..243b767 100644
+--- a/e2e/fixtures/authFixture.ts
++++ b/e2e/fixtures/authFixture.ts
+@@ -36,7 +36,7 @@ export function readAuthFixtureEnv(): AuthFixtureEnv | null {
+ 
+ const NO_PERSISTENCE = { auth: { persistSession: false, autoRefreshToken: false } };
+ 
+-function adminClient(env: AuthFixtureEnv): SupabaseClient {
++export function adminClient(env: AuthFixtureEnv): SupabaseClient {
+   return createClient(env.url, env.serviceRoleKey, NO_PERSISTENCE);
+ }
+ 
+diff --git a/e2e/names-and-seats.spec.ts b/e2e/names-and-seats.spec.ts
+new file mode 100644
+index 0000000..1631a6d
+--- /dev/null
++++ b/e2e/names-and-seats.spec.ts
+@@ -0,0 +1,184 @@
++import { expect, test, type Locator, type Page } from '@playwright/test';
++import type { SupabaseClient } from '@supabase/supabase-js';
++import { DISPLAY_NAME_MAX_LENGTH } from '../src/auth/authGateway';
++import { anonymousDevice, CHILD_E, FIXTURE_AREAS, GROUP_A, readAuthFixtureEnv } from './fixtures/authFixture';
++import { gotoHome } from './support';
++
++// A parent edits their own name and their child's name in Preferences, and a car seats at most 6.
++// The first describe runs on the in-memory demo week, the other two only against the local Supabase stack
++// (README "Running the invite-link e2e").
++const fixture = readAuthFixtureEnv();
++
++async function openPreferences(page: Page): Promise<void> {
++  await page.getByTestId('open-preferences').click();
++  await expect(page.getByTestId('preferences')).toBeVisible();
++}
++
++test.describe('names and seats in Preferences', { tag: '@pending' }, () => {
++  test.beforeEach(async ({ page }) => {
++    await gotoHome(page);
++    await openPreferences(page);
++  });
++
++  test('seats go from 3 to 6, and 6 is the largest choice', async ({ page }) => {
++    for (const seats of ['3', '4', '5', '6']) await expect(page.getByTestId(`seats-${seats}`)).toBeVisible();
++    await expect(page.locator('[data-testid^="seats-"]')).toHaveCount(4);
++    await expect(page.getByTestId('seats-6+')).toHaveCount(0);
++  });
++
++  test('choosing 6 seats is saved', async ({ page }) => {
++    await page.getByTestId('seats-6').click();
++    await page.getByTestId('preferences-save').click();
++    await expect(page.getByTestId('week-grid')).toBeVisible();
++    await openPreferences(page);
++    await expect(page.getByTestId('seats-6')).toHaveAttribute('aria-pressed', 'true');
++  });
++
++  test('shows my name and my child’s name, ready to edit', async ({ page }) => {
++    await page.getByTestId('back').click();
++    const greeting = await page.getByTestId('header-greeting').innerText();
++    await openPreferences(page);
++    const parentName = await page.getByTestId('names-parent').inputValue();
++    expect(parentName.length).toBeGreaterThan(0);
++    expect(greeting).toContain(parentName);
++    expect((await page.getByTestId('names-child').inputValue()).length).toBeGreaterThan(0);
++    await expect(page.getByTestId('names-parent')).toHaveAttribute('maxlength', String(DISPLAY_NAME_MAX_LENGTH));
++    await expect(page.getByTestId('names-child')).toHaveAttribute('maxlength', String(DISPLAY_NAME_MAX_LENGTH));
++  });
++
++  test('editing my name and my child’s name updates the header', async ({ page }) => {
++    await page.getByTestId('names-parent').fill('שם');
++    await page.getByTestId('names-child').fill('שם');
++    await page.getByTestId('preferences-save').click();
++    await expect(page.getByTestId('week-grid')).toBeVisible();
++    await expect(page.getByTestId('header-greeting')).toContainText('שם');
++    await expect(page.getByTestId('header-subtitle')).toContainText('שם');
++  });
++
++  test('an empty name is refused in place and nothing is saved', async ({ page }) => {
++    const before = await page.getByTestId('names-parent').inputValue();
++    await page.getByTestId('names-parent').fill('   ');
++    await page.getByTestId('preferences-save').click();
++    await expect(page.getByTestId('names-error')).toBeVisible();
++    expect(await page.getByTestId('names-error').innerText()).not.toMatch(/[A-Za-z]/);
++    await expect(page.getByTestId('preferences')).toBeVisible();
++
++    await page.getByTestId('back').click();
++    await expect(page.getByTestId('header-greeting')).toContainText(before);
++  });
++});
++
++/** One fresh family per project, so renaming never touches a name another spec relies on. */
++const FAMILY_BY_PROJECT: Record<string, { parent: string; child: string; newParent: string; newChild: string }> = {
++  mobile: { parent: 'שם', child: 'שם', newParent: 'שם', newChild: 'שם' },
++  desktop: { parent: 'שם', child: 'שם', newParent: 'שם', newChild: 'שם' },
++};
++
++interface Family {
++  childId: string;
++  parentId: string;
++  names: { parent: string; child: string; newParent: string; newChild: string };
++}
++
++async function addFamily(device: SupabaseClient, projectName: string, suffix = ''): Promise<Family> {
++  const base = FAMILY_BY_PROJECT[projectName];
++  if (!base) throw new Error(`no family for project ${projectName}`);
++  const names = { ...base, parent: `${base.parent}${suffix}`, child: `${base.child}${suffix}` };
++  const joined = await device.rpc('join_group', { p_token: GROUP_A.token, p_display_name: names.parent, p_child_name: names.child, p_area: FIXTURE_AREAS[0] });
++  expect(joined.error).toBeNull();
++  const [row] = joined.data as Array<{ child_id: string; parent_id: string }>;
++  if (!row) throw new Error('join_group returned no row');
++  return { childId: row.child_id, parentId: row.parent_id, names };
++}
++
++function childButton(page: Page, childId: string): Locator {
++  return page.locator(`[data-testid="pick-child"][data-child-id="${childId}"]`);
++}
++
++async function enterAs(page: Page, family: Family): Promise<void> {
++  await page.goto(`/join/${GROUP_A.token}`);
++  await childButton(page, family.childId).click();
++  await expect(page.getByTestId('week-grid')).toBeVisible();
++}
++
++test.describe('names on the real database', { tag: '@pending' }, () => {
++  test.skip(!fixture, 'needs the E2E_SUPABASE_* variables and a local stack with anonymous sign-ins');
++
++  test('renamed names are saved, survive a reload, and the family’s other phone shows them', async ({ page, browser }, testInfo) => {
++    if (!fixture) return;
++    const family = await addFamily(await anonymousDevice(fixture), testInfo.project.name);
++    await enterAs(page, family);
++
++    await openPreferences(page);
++    await page.getByTestId('names-parent').fill(family.names.newParent);
++    await page.getByTestId('names-child').fill(family.names.newChild);
++    await page.getByTestId('preferences-save').click();
++    await expect(page.getByTestId('week-grid')).toBeVisible();
++
++    await page.reload();
++    await expect(page.getByTestId('header-greeting')).toContainText(family.names.newParent);
++    await expect(page.getByTestId('header-subtitle')).toContainText(family.names.newChild);
++
++    const otherDevice = await browser.newContext();
++    try {
++      const otherPage = await otherDevice.newPage();
++      await otherPage.goto(`/join/${GROUP_A.token}`);
++      await expect(childButton(otherPage, family.childId)).toContainText(family.names.newChild);
++      await childButton(otherPage, family.childId).click();
++      await expect(otherPage.getByTestId('header-greeting')).toContainText(family.names.newParent);
++      await expect(otherPage.getByTestId('header-subtitle')).toContainText(family.names.newChild);
++    } finally {
++      await otherDevice.close();
++    }
++  });
++
++  test('a failed rename stays in Preferences with an in-place error', async ({ page }, testInfo) => {
++    if (!fixture) return;
++    const family = await addFamily(await anonymousDevice(fixture), testInfo.project.name, 'שם');
++    await enterAs(page, family);
++    await page.route('**/rest/v1/children*', (route) =>
++      route.request().method() === 'PATCH'
++        ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'simulated outage' }) })
++        : route.continue(),
++    );
++    await openPreferences(page);
++    await page.getByTestId('names-child').fill(family.names.newChild);
++    await page.getByTestId('preferences-save').click();
++    await expect(page.getByTestId('preferences-save-error')).toBeVisible();
++    await expect(page.getByTestId('preferences')).toBeVisible();
++  });
++});
++
++test.describe('names and seats: the API refuses what the screen never offers', { tag: '@pending' }, () => {
++  test.skip(!fixture, 'needs the E2E_SUPABASE_* variables and a local stack with anonymous sign-ins');
++
++  test('a parent renames only their own family’s child, within the name length', async () => {
++    if (!fixture) return;
++    const device = await anonymousDevice(fixture);
++    const family = await addFamily(device, test.info().project.name, 'שם');
++
++    const otherFamily = await device.from('children').update({ display_name: 'שם' }).eq('id', CHILD_E.id).select('id');
++    expect(otherFamily.data ?? []).toEqual([]);
++    const tooLong = await device.from('children').update({ display_name: 'שם'.repeat(DISPLAY_NAME_MAX_LENGTH + 1) }).eq('id', family.childId);
++    expect(tooLong.error).not.toBeNull();
++    const movedGroup = await device.from('children').update({ group_id: GROUP_A.id }).eq('id', family.childId);
++    expect(movedGroup.error).not.toBeNull();
++
++    const own = await device.from('children').update({ display_name: family.names.newChild }).eq('id', family.childId).select('id');
++    expect(own.data).toEqual([{ id: family.childId }]);
++  });
++
++  test('a car cannot be saved with more than 6 seats', async () => {
++    if (!fixture) return;
++    const device = await anonymousDevice(fixture);
++    const family = await addFamily(device, test.info().project.name, 'שם');
++    const seven = await device
++      .from('driving_preferences')
++      .upsert({ parent_id: family.parentId, group_id: GROUP_A.id, max_drives_per_week: 2, seats: 7 }, { onConflict: 'parent_id' });
++    expect(seven.error).not.toBeNull();
++    const six = await device
++      .from('driving_preferences')
++      .upsert({ parent_id: family.parentId, group_id: GROUP_A.id, max_drives_per_week: 2, seats: 6 }, { onConflict: 'parent_id' });
++    expect(six.error).toBeNull();
++  });
++});
+diff --git a/e2e/second-parent.spec.ts b/e2e/second-parent.spec.ts
+new file mode 100644
+index 0000000..4a8ea56
+--- /dev/null
++++ b/e2e/second-parent.spec.ts
+@@ -0,0 +1,85 @@
++import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
++import { anonymousDevice, CHILD_C, FIXTURE_AREAS, GROUP_A, readAuthFixtureEnv } from './fixtures/authFixture';
++import { expectNoLatinText } from './support';
++
++// Both parents of a child share one family: each child is listed once as "שם שם <child>", and any phone that taps
++// it acts for that family. The second parent's phone adds no child and no family. Runs only against the local
++// Supabase stack (README "Running the invite-link e2e").
++const fixture = readAuthFixtureEnv();
++
++/** One fresh family per project, created through the API as the first phone would: both projects run at once. */
++const FAMILY_BY_PROJECT: Record<string, { parent: string; child: string }> = {
++  mobile: { parent: 'שם', child: 'שם' },
++  desktop: { parent: 'שם', child: 'שם' },
++};
++
++function childButton(page: Page, childId: string): Locator {
++  return page.locator(`[data-testid="pick-child"][data-child-id="${childId}"]`);
++}
++
++async function enterAs(page: Page, childId: string): Promise<void> {
++  await page.goto(`/join/${GROUP_A.token}`);
++  await expect(page.getByTestId('pick-child-screen')).toBeVisible();
++  await childButton(page, childId).click();
++  await expect(page.getByTestId('week-grid')).toBeVisible();
++}
++
++async function withPhone(browser: Browser, run: (page: Page) => Promise<void>): Promise<void> {
++  const phone = await browser.newContext();
++  try {
++    await run(await phone.newPage());
++  } finally {
++    await phone.close();
++  }
++}
++
++test.describe('second parent', { tag: '@pending' }, () => {
++  test.skip(!fixture, 'needs the E2E_SUPABASE_* variables and a local stack with anonymous sign-ins');
++
++  test('each child is listed once as “parent of <child>”, with no parent name, and one tap opens the family’s week', async ({ page }) => {
++    await page.goto(`/join/${GROUP_A.token}`);
++    await expect(childButton(page, CHILD_C.id)).toHaveCount(1);
++    await expect(childButton(page, CHILD_C.id)).toContainText(CHILD_C.name);
++    await expect(childButton(page, CHILD_C.id)).not.toContainText(CHILD_C.parent.name);
++    await expectNoLatinText(page);
++
++    await childButton(page, CHILD_C.id).click();
++    await expect(page.getByTestId('week-grid')).toBeVisible();
++    await expect(page.getByTestId('header-subtitle')).toContainText(CHILD_C.name);
++  });
++
++  test('the second parent’s phone acts for the same family: an absence marked on one phone shows on the other', async ({ page, browser }) => {
++    if (!fixture) return;
++    const names = FAMILY_BY_PROJECT[test.info().project.name];
++    if (!names) throw new Error(`no family for project ${test.info().project.name}`);
++    const joined = await (await anonymousDevice(fixture)).rpc('join_group', {
++      p_token: GROUP_A.token,
++      p_display_name: names.parent,
++      p_child_name: names.child,
++      p_area: FIXTURE_AREAS[0],
++    });
++    expect(joined.error).toBeNull();
++    const [family] = joined.data as Array<{ child_id: string }>;
++    if (!family) throw new Error('join_group returned no row');
++
++    await enterAs(page, family.child_id);
++    const attendance = page.locator('[data-testid^="attendance-switch-"]').first();
++    await expect(attendance).toHaveAttribute('aria-checked', 'true');
++    const switchTestId = await attendance.getAttribute('data-testid');
++    if (!switchTestId) throw new Error('attendance switch has no test id');
++    await attendance.click();
++    await expect(attendance).toHaveAttribute('aria-checked', 'false');
++
++    await withPhone(browser, async (secondPhone) => {
++      await enterAs(secondPhone, family.child_id);
++      await expect(secondPhone.getByTestId('header-subtitle')).toContainText(names.child);
++      await expect(secondPhone.getByTestId(switchTestId)).toHaveAttribute('aria-checked', 'false');
++    });
++
++    // Two phones, still one child on the list.
++    await withPhone(browser, async (thirdPhone) => {
++      await thirdPhone.goto(`/join/${GROUP_A.token}`);
++      await expect(childButton(thirdPhone, family.child_id)).toHaveCount(1);
++    });
++  });
++});
+diff --git a/e2e/standing-drives.spec.ts b/e2e/standing-drives.spec.ts
+new file mode 100644
+index 0000000..21cf846
+--- /dev/null
++++ b/e2e/standing-drives.spec.ts
+@@ -0,0 +1,165 @@
++import { expect, test, type Page } from '@playwright/test';
++import { adminClient, anonymousDevice, CHILD_C, FIXTURE_AREAS, GROUP_A, readAuthFixtureEnv } from './fixtures/authFixture';
++
++// Standing drives: the team's sheet of who drives which leg every week (e.g. "שם (שם שם שם)" always takes
++// Wednesday's שם) is loaded once, and each new week's cars come already filled with those drivers. A parent can
++// still release one week's car; it is never refilled. Runs only against the local Supabase stack.
++const fixture = readAuthFixtureEnv();
++
++/** Wednesday: any weekday works, the rolling window always holds the next practice of every slot. */
++const WEEKDAY = 3;
++
++/** שם always drives שם in car 1; שם always drives שם in car 2. */
++const FAMILY_A = { name: 'שם', child: 'שם' };
++const FAMILY_B = { name: 'שם', child: 'שם' };
++
++interface StandingGroup {
++  id: string;
++  token: string;
++  slotId: string;
++  familyAId: string;
++  familyAChildId: string;
++  familyBId: string;
++  familyBChildId: string;
++}
++
++/** A group of its own per project, so the cars this spec fills and releases are never another spec's. */
++const GROUP_BY_PROJECT: Record<string, StandingGroup> = {
++  mobile: {
++    id: '00000000-0000-4000-8000-0000000e2e5a',
++    token: 'e2e-standing-token-mobile',
++    slotId: '40000000-0000-4000-8000-0000000e2e5a',
++    familyAId: '21000000-0000-4000-8000-0000000e2e5a',
++    familyAChildId: '31000000-0000-4000-8000-0000000e2e5a',
++    familyBId: '22000000-0000-4000-8000-0000000e2e5a',
++    familyBChildId: '32000000-0000-4000-8000-0000000e2e5a',
++  },
++  desktop: {
++    id: '00000000-0000-4000-8000-0000000e2e5b',
++    token: 'e2e-standing-token-desktop',
++    slotId: '40000000-0000-4000-8000-0000000e2e5b',
++    familyAId: '21000000-0000-4000-8000-0000000e2e5b',
++    familyAChildId: '31000000-0000-4000-8000-0000000e2e5b',
++    familyBId: '22000000-0000-4000-8000-0000000e2e5b',
++    familyBChildId: '32000000-0000-4000-8000-0000000e2e5b',
++  },
++};
++
++function standingGroup(): StandingGroup {
++  const projectName = test.info().project.name;
++  const group = GROUP_BY_PROJECT[projectName];
++  if (!group) throw new Error(`no standing-drives group for project ${projectName}`);
++  return group;
++}
++
++function must<Result extends { error: { message: string } | null }>(step: string, result: Result): Result {
++  if (result.error) throw new Error(`standing-drives setup: ${step}: ${result.error.message}`);
++  return result;
++}
++
++async function enterAs(page: Page, group: StandingGroup, childId: string): Promise<void> {
++  await page.goto(`/join/${group.token}`);
++  await page.locator(`[data-testid="pick-child"][data-child-id="${childId}"]`).click();
++  await expect(page.getByTestId('week-grid')).toBeVisible();
++}
++
++test.describe('standing drives', () => {
++  test.skip(!fixture, 'needs the E2E_SUPABASE_* variables and a local stack with anonymous sign-ins');
++  // The cases share one seeded group per project and release one of its cars: one worker, in order.
++  test.describe.configure({ mode: 'serial' });
++
++  test.beforeAll(async () => {
++    if (!fixture) return;
++    const group = standingGroup();
++    const { slotId } = group;
++    const admin = adminClient(fixture);
++    must('delete group', await admin.from('groups').delete().eq('id', group.id));
++    must('insert group', await admin.from('groups').insert({ id: group.id, name: 'שם שם', invite_token: group.token, areas: FIXTURE_AREAS }));
++    must(
++      'insert schedule',
++      await admin.from('schedule_slots').insert({
++        id: slotId,
++        group_id: group.id,
++        weekday: WEEKDAY,
++        practice_start: '17:00',
++        practice_end: '18:30',
++        pickup_time: '16:30',
++        departure_time: '18:30',
++      }),
++    );
++    must(
++      'insert parents',
++      await admin.from('parents').insert([
++        { id: group.familyAId, group_id: group.id, display_name: FAMILY_A.name, grammatical_gender: 'f' },
++        { id: group.familyBId, group_id: group.id, display_name: FAMILY_B.name, grammatical_gender: 'm' },
++      ]),
++    );
++    must(
++      'insert children',
++      await admin.from('children').insert([
++        { id: group.familyAChildId, group_id: group.id, parent_id: group.familyAId, display_name: FAMILY_A.child, area: FIXTURE_AREAS[0] },
++        { id: group.familyBChildId, group_id: group.id, parent_id: group.familyBId, display_name: FAMILY_B.child, area: FIXTURE_AREAS[1] },
++      ]),
++    );
++    must(
++      'insert standing drives',
++      await admin.from('standing_drives').insert([
++        { group_id: group.id, parent_id: group.familyAId, schedule_slot_id: slotId, direction: 'to', position: 0 },
++        { group_id: group.id, parent_id: group.familyBId, schedule_slot_id: slotId, direction: 'back', position: 1 },
++      ]),
++    );
++  });
++
++  test('a family with a standing drive finds this week’s car already theirs, and only that one', async ({ page }) => {
++    const group = standingGroup();
++    await enterAs(page, group, group.familyAChildId);
++    await expect(page.locator('[data-state="meDriving"]')).toHaveCount(1);
++    // שם's standing שם shows as his, not as an empty slot.
++    await expect(page.locator('[data-state="otherDriver"]')).toHaveCount(1);
++  });
++
++  test('the other family sees the same week from their side', async ({ page }) => {
++    const group = standingGroup();
++    await enterAs(page, group, group.familyBChildId);
++    await expect(page.locator('[data-state="meDriving"]')).toHaveCount(1);
++    await expect(page.locator('[data-state="otherDriver"]')).toHaveCount(1);
++  });
++
++  test('releasing one week’s standing car leaves it open; it is not filled again', async ({ page }) => {
++    if (!fixture) return;
++    const group = standingGroup();
++    await enterAs(page, group, group.familyAChildId);
++    const mine = page.locator('[data-state="meDriving"]');
++    await expect(mine).toHaveCount(1);
++    const carId = (await mine.getAttribute('data-testid'))?.replace(/^slot-/, '');
++    if (!carId) throw new Error('my car has no test id');
++
++    const familyAPhone = await anonymousDevice(fixture);
++    must('claim', await familyAPhone.rpc('claim_child', { p_token: group.token, p_child_id: group.familyAChildId }));
++    const released = await familyAPhone.rpc('release_car', { p_car_id: carId });
++    expect(released.data).toBe('ok');
++
++    // Not a reload: after the pick the page sits on `/`, which here opens group A's picker (the site token), and
++    // re-opening this group's own link reads the week afresh for a device already in it.
++    await page.goto(`/join/${group.token}`);
++    await expect(page.getByTestId('week-grid')).toBeVisible();
++    await expect(page.getByTestId(`slot-${carId}`)).toHaveAttribute('data-state', 'open');
++    await expect(page.locator('[data-state="meDriving"]')).toHaveCount(0);
++  });
++
++  test('standing drives are read only inside their own group and never written by a device', async () => {
++    if (!fixture) return;
++    const group = standingGroup();
++    const outsider = await anonymousDevice(fixture);
++    must('claim', await outsider.rpc('claim_child', { p_token: GROUP_A.token, p_child_id: CHILD_C.id }));
++    expect((await outsider.from('standing_drives').select('parent_id').eq('group_id', group.id)).data ?? []).toEqual([]);
++
++    const member = await anonymousDevice(fixture);
++    must('claim', await member.rpc('claim_child', { p_token: group.token, p_child_id: group.familyBChildId }));
++    expect(((await member.from('standing_drives').select('parent_id')).data ?? []).length).toBe(2);
++    const forged = await member
++      .from('standing_drives')
++      .insert({ group_id: group.id, parent_id: group.familyBId, schedule_slot_id: group.slotId, direction: 'to', position: 1 });
++    expect(forged.error).not.toBeNull();
++  });
++});
+diff --git a/src/data/familiesSeed.test.ts b/src/data/familiesSeed.test.ts
+new file mode 100644
+index 0000000..0a444c5
+--- /dev/null
++++ b/src/data/familiesSeed.test.ts
+@@ -0,0 +1,99 @@
++// @vitest-environment node
++// supabase/families-seed.template.sql is what the developer fills with the team's families and standing drives and
++// pastes into the hosted SQL editor after the production seed (README "Upgrading an existing deploy"); this proves it
++// applies to the migrated schema as written, on top of that seed.
++import { readFileSync } from 'node:fs';
++import { resolve } from 'node:path';
++import type { PGlite } from '@electric-sql/pglite';
++import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
++import { BOOT_TIMEOUT_MS, bootMigratedDatabase } from './testing/migratedDatabase';
++
++const PRODUCTION_SEED = readFileSync(resolve(process.cwd(), 'supabase/production-seed.template.sql'), 'utf8');
++const FAMILIES_SEED = readFileSync(resolve(process.cwd(), 'supabase/families-seed.template.sql'), 'utf8');
++
++/** The template's first placeholder family, as written in it. */
++const FIRST_CHILD = 'שם/שם 1';
++const FIRST_AREA = `'${FIRST_CHILD}', 'שם'`;
++const DEVICE = '10000000-0000-4000-8000-0000000000f1';
++
++let database: PGlite;
++
++beforeAll(async () => {
++  database = await bootMigratedDatabase();
++}, BOOT_TIMEOUT_MS);
++
++beforeEach(async () => {
++  await database.exec(`delete from public.groups; delete from auth.users;`); // cascades to every seeded row
++  await database.exec(PRODUCTION_SEED);
++});
++
++afterAll(async () => {
++  await database.close();
++});
++
++async function rows<Row>(sql: string): Promise<Row[]> {
++  return (await database.query<Row>(sql)).rows;
++}
++
++/** Opens the app as the family of `childName`, the way claim_child binds a phone. */
++async function enterAs(childName: string): Promise<void> {
++  await database.query(`insert into auth.users (id) values ($1)`, [DEVICE]);
++  await database.query(
++    `insert into public.parent_devices (user_id, parent_id, group_id)
++     select $1, parent_id, group_id from public.children where display_name = $2`,
++    [DEVICE, childName],
++  );
++  await database.query(`select set_config('request.jwt.claim.sub', $1, false)`, [DEVICE]);
++}
++
++describe('families seed template', () => {
++  it('adds every family, each with its child and an area of the group', async () => {
++    await database.exec(FAMILIES_SEED);
++
++    const families = await rows<{ family: string; child: string; area: string; is_group_area: boolean }>(
++      `select p.display_name as family, c.display_name as child, c.area, c.area = any (g.areas) as is_group_area
++         from public.children c join public.parents p on p.id = c.parent_id join public.groups g on g.id = c.group_id`,
++    );
++    expect(families.length).toBeGreaterThan(1);
++    expect(families.every((family) => family.is_group_area)).toBe(true);
++    expect(new Set(families.map((family) => family.family)).size).toBe(families.length);
++  });
++
++  it('loads the standing drives, so the next weeks’ cars come already filled', async () => {
++    await database.exec(FAMILIES_SEED);
++    const standing = await rows<{ count: number }>(`select count(*)::int as count from public.standing_drives`);
++    expect(standing[0]?.count).toBeGreaterThan(0);
++
++    await enterAs(FIRST_CHILD);
++    await database.query(`select public.ensure_practices('2026-10-25')`);
++    // Every standing drive lands in each of the two weeks' practices of its slot.
++    const filled = await rows<{ count: number }>(`select count(*)::int as count from public.cars where driver_id is not null`);
++    expect(filled[0]?.count).toBe((standing[0]?.count ?? 0) * 2);
++  });
++
++  it('runs again without adding a second family or a second drive', async () => {
++    await database.exec(FAMILIES_SEED);
++    const before = await rows(`select id from public.parents union all select id from public.children`);
++    await database.exec(FAMILIES_SEED);
++    const after = await rows(`select id from public.parents union all select id from public.children`);
++    expect(after).toEqual(before);
++  });
++
++  it('refuses a child whose area the group does not have, and adds no one', async () => {
++    await expect(database.exec(FAMILIES_SEED.replace(FIRST_AREA, `'${FIRST_CHILD}', 'שם שם שם'`))).rejects.toThrow(
++      /not one of the group's areas/,
++    );
++    expect(await rows(`select 1 from public.parents`)).toHaveLength(0);
++  });
++
++  it('refuses a drive for a child it has no family for', async () => {
++    const unknownChild = FAMILIES_SEED.replace(/\('שם\/שם 1', (\d)/, `('שם/שם שם שם', $1`);
++    expect(unknownChild).not.toBe(FAMILIES_SEED);
++    await expect(database.exec(unknownChild)).rejects.toThrow(/no family for child/);
++  });
++
++  it('refuses to run before the production seed created the group', async () => {
++    await database.exec(`delete from public.groups`);
++    await expect(database.exec(FAMILIES_SEED)).rejects.toThrow(/exactly one group/);
++  });
++});
+diff --git a/src/data/migration.test.ts b/src/data/migration.test.ts
+index de4c823..dc0d661 100644
+--- a/src/data/migration.test.ts
++++ b/src/data/migration.test.ts
+@@ -76,6 +76,67 @@ describe('migration: ensure_practices', () => {
+   });
+ });
+ 
++describe('migration: standing drives fill the cars ensure_practices creates', () => {
++  async function standingDrive(parentId: string, direction: 'to' | 'back', position: number, groupId = GROUP): Promise<void> {
++    await database.query(
++      `insert into public.standing_drives (group_id, parent_id, schedule_slot_id, direction, position) values ($1, $2, $3, $4, $5)`,
++      [groupId, parentId, SLOT_MON, direction, position],
++    );
++  }
++
++  async function driverOf(practiceDate: string, direction: 'to' | 'back', position: number): Promise<string | null> {
++    return scalar<string | null>(`select driver_id from public.cars where id = $1`, [await carId(practiceDate, direction, position)]);
++  }
++
++  it('gives a new week’s car its standing driver, and leaves every other car open', async () => {
++    await standingDrive(ME, 'to', 0);
++    await standingDrive(FAMILY_D, 'back', 1);
++    await database.query(`select public.ensure_practices('2026-10-19')`); // creates Mon 26.10
++    expect(await driverOf('2026-10-26', 'to', 0)).toBe(ME);
++    expect(await driverOf('2026-10-26', 'back', 1)).toBe(FAMILY_D);
++    expect(await driverOf('2026-10-26', 'to', 1)).toBeNull();
++    expect(await driverOf('2026-10-26', 'back', 0)).toBeNull();
++  });
++
++  it('never changes a car that already exists, so a week released or created before the rota stays open', async () => {
++    await standingDrive(ME, 'to', 0);
++    await database.query(`select public.ensure_practices('2026-10-12')`);
++    expect(await driverOf('2026-10-12', 'to', 0)).toBeNull();
++    expect(await driverOf('2026-10-19', 'to', 0)).toBeNull();
++  });
++
++  it('keeps one family to one car of a leg', async () => {
++    await standingDrive(ME, 'to', 0);
++    await expect(standingDrive(ME, 'to', 1)).rejects.toThrow(/duplicate key/);
++  });
++
++  it('refuses a standing drive whose family is in another group', async () => {
++    await expect(standingDrive(STRANGER, 'to', 0)).rejects.toThrow(/foreign key/);
++  });
++
++  it('shows the rota only inside its own group, and a device writes none of it', async () => {
++    await standingDrive(FAMILY_D, 'to', 0);
++    await database.exec(`set role authenticated`);
++    try {
++      expect(await scalar<number>(`select count(*)::int from public.standing_drives`)).toBe(1);
++      await actAs(USER_STRANGER);
++      expect(await scalar<number>(`select count(*)::int from public.standing_drives`)).toBe(0);
++      await actAs(USER_ME);
++      await expect(standingDrive(ME, 'back', 0)).rejects.toThrow(/permission denied/);
++      await expect(database.query(`update public.standing_drives set parent_id = $1`, [ME])).rejects.toThrow(/permission denied/);
++      await expect(database.query(`delete from public.standing_drives`)).rejects.toThrow(/permission denied/);
++    } finally {
++      await database.exec(`reset role`);
++    }
++    await database.exec(`set role anon`);
++    try {
++      await expect(standingDrive(ME, 'back', 0)).rejects.toThrow(/permission denied/);
++    } finally {
++      await database.exec(`reset role`);
++    }
++  });
++});
++
+ describe('migration: first confirmation wins (claim_car)', () => {
+   it('fills an empty car, then answers slot_taken to a second claimant', async () => {
+     const car = await carId('2026-10-12', 'to', 0);
+diff --git a/supabase/families-seed.template.sql b/supabase/families-seed.template.sql
+new file mode 100644
+index 0000000..151ba12
+--- /dev/null
++++ b/supabase/families-seed.template.sql
+@@ -0,0 +1,66 @@
++-- The team's families and their standing weekly drives, for the HOSTED project only, run after
++-- production-seed.template.sql. Replace the placeholder rows marked EDIT in the Supabase SQL editor (never commit
++-- real names here) and run it. Safe to run again: a child already in the group (by name, e.g. one whose parent
++-- joined through the link) keeps their family, and a standing drive already loaded is replaced by its row here.
++-- Not wired into config.toml's [db.seed], so `supabase db reset` and `db push` never run it.
++do $$
++declare
++  v_group_id uuid;
++  v_areas text[];
++  v_family record;
++  v_drive record;
++  v_parent_id uuid;
++  v_slot_id uuid;
++begin
++  if (select count(*) from public.groups) <> 1 then
++    raise exception 'expected exactly one group: run production-seed.template.sql first';
++  end if;
++  select id, areas into v_group_id, v_areas from public.groups;
++
++  -- EDIT: one row per family. Both parents of a child share this one family; its name is what the app shows for
++  -- them. The area must be one of the group's areas.
++  for v_family in
++    select * from (values
++      ('שם 1', 'שם/שם 1', 'שם'),
++      ('שם 2', 'שם/שם 2', 'שם'),
++      ('שם 3', 'שם/שם 3', 'שם')
++    ) as f (family_name, child_name, area)
++  loop
++    if v_family.area is null or not v_family.area = any (v_areas) then
++      raise exception 'area % of child % is not one of the group''s areas %', v_family.area, v_family.child_name, v_areas;
++    end if;
++    if not exists (select 1 from public.children where group_id = v_group_id and display_name = v_family.child_name) then
++      insert into public.parents (group_id, display_name)
++      values (v_group_id, v_family.family_name)
++      returning id into v_parent_id;
++      insert into public.children (group_id, parent_id, display_name, area)
++      values (v_group_id, v_parent_id, v_family.child_name, v_family.area);
++    end if;
++  end loop;
++
++  -- EDIT: one row per standing drive, as on the team's sheet. weekday 0 = Sunday; direction 'to' is שם and
++  -- 'back' is שם; car is the sheet's שם 1 or שם 2.
++  for v_drive in
++    select * from (values
++      ('שם/שם 1', 1, 'to', 1),
++      ('שם/שם 2', 1, 'back', 1),
++      ('שם/שם 3', 2, 'to', 2),
++      ('שם/שם 1', 4, 'back', 2)
++    ) as d (child_name, weekday, direction, car)
++  loop
++    select parent_id into v_parent_id from public.children where group_id = v_group_id and display_name = v_drive.child_name;
++    if v_parent_id is null then
++      raise exception 'no family for child % (add them to the families above)', v_drive.child_name;
++    end if;
++    select id into v_slot_id from public.schedule_slots where group_id = v_group_id and weekday = v_drive.weekday;
++    if v_slot_id is null then
++      raise exception 'no practice on weekday % (add it to schedule_slots first)', v_drive.weekday;
++    end if;
++    insert into public.standing_drives (group_id, parent_id, schedule_slot_id, direction, position)
++    values (v_group_id, v_parent_id, v_slot_id, v_drive.direction::public.direction, v_drive.car - 1)
++    on conflict (schedule_slot_id, direction, position) do update set parent_id = excluded.parent_id;
++  end loop;
++end
++$$;
++
++select p.display_name as family, c.display_name as child, c.area from public.children c join public.parents p on p.id = c.parent_id;
+diff --git a/supabase/migrations/20261024000001_standing_drives.sql b/supabase/migrations/20261024000001_standing_drives.sql
+new file mode 100644
+index 0000000..d67c9ce
+--- /dev/null
++++ b/supabase/migrations/20261024000001_standing_drives.sql
+@@ -0,0 +1,64 @@
++-- Standing drives: the team's fixed weekly rota (each family drives the same leg every week, up to two cars per
++-- leg). ensure_practices() fills the base cars it creates from it, so each new week arrives already filled.
++--
++-- Only cars ensure_practices() CREATES get a driver (`on conflict do nothing`): nothing already in the database
++-- changes, and a car a family released for one week stays open. A phone never writes the rota; the developer
++-- seeds it in the SQL editor (supabase/families-seed.template.sql).
++--
++-- Additive only: the earlier migrations are applied on hosted and stay untouched. Plain statements only, so
++-- `supabase db push` applies the whole file in one transaction or not at all.
++
++create table public.standing_drives (
++  group_id uuid not null,
++  parent_id uuid not null,
++  schedule_slot_id uuid not null,
++  direction public.direction not null,
++  -- The base car: 0 is the sheet's שם 1, 1 its שם 2.
++  position smallint not null check (position in (0, 1)),
++  primary key (schedule_slot_id, direction, position),
++  -- Mirrors cars_one_car_per_leg_per_driver: a filled week must never hold one family in both cars of a leg.
++  unique (schedule_slot_id, direction, parent_id),
++  foreign key (parent_id, group_id) references public.parents (id, group_id) on delete cascade,
++  foreign key (schedule_slot_id, group_id) references public.schedule_slots (id, group_id) on delete cascade
++);
++
++alter table public.standing_drives enable row level security;
++create policy standing_drives_read on public.standing_drives for select using (group_id = public.current_group_id());
++-- Supabase grants every new table to anon and authenticated directly; TRUNCATE is revoked too because it skips RLS.
++revoke insert, update, delete, truncate on public.standing_drives from anon, authenticated;
++
++-- Same body as init.sql's, except that the base-car insert takes its driver from the rota.
++create or replace function public.ensure_practices(p_from date) returns void
++  language plpgsql security definer set search_path = public
++  as $$
++declare
++  v_group uuid := public.current_group_id();
++begin
++  perform public.require_parent();
++
++  insert into public.practices (group_id, schedule_slot_id, practice_date,
++                                practice_start, practice_end, pickup_time, departure_time)
++  select s.group_id, s.id, g.day_ts::date,
++         s.practice_start, s.practice_end, s.pickup_time, s.departure_time
++    from public.schedule_slots s
++    join generate_series(p_from, p_from + 13, interval '1 day') as g (day_ts)
++      on extract(dow from g.day_ts)::int = s.weekday
++   where s.group_id = v_group
++  on conflict (group_id, practice_date) do nothing;
++
++  insert into public.cars (group_id, practice_id, direction, position, driver_id)
++  select p.group_id, p.id, d.direction, pos.position, sd.parent_id
++    from public.practices p
++   cross join (values ('to'::public.direction), ('back'::public.direction)) as d (direction)
++   cross join (values (0::smallint), (1::smallint)) as pos (position)
++    left join public.standing_drives sd
++      on sd.schedule_slot_id = p.schedule_slot_id and sd.direction = d.direction and sd.position = pos.position
++   where p.group_id = v_group and p.practice_date between p_from and p_from + 13
++  on conflict (practice_id, direction, position) do nothing;
++end $$;
++
++-- `create or replace` keeps init.sql's grants (execute for authenticated only); restated so this file stands alone.
++revoke all on function public.ensure_practices(date) from public, anon;
++grant execute on function public.ensure_practices(date) to authenticated;
++
++alter publication supabase_realtime add table public.standing_drives;

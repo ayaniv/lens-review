@@ -600,6 +600,54 @@ describe('discover-rule-sources.mjs', () => {
     assert.ok(JSON.parse(result.stdout).some(source => source.path === 'packages/ui/AGENTS.md'))
   })
 
+  describe('the developer\'s taste file', () => {
+    let tasteFile
+    // A HOME whose ~/.claude holds a CLAUDE.md: the script must never read it on its own.
+    let homeWithClaudeDir
+    const discover = (args, env = {}) =>
+      runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts', ...args], {
+        env: { ...process.env, HOME: homeWithClaudeDir, LENS_REVIEW_TASTE: '', ...env },
+      })
+
+    beforeEach(() => {
+      homeWithClaudeDir = makeTempDir('taste-home')
+      writeFiles(homeWithClaudeDir, { '.claude/CLAUDE.md': '# personal rules\n', '.claude/settings.json': '{}\n' })
+      tasteFile = path.join(makeTempDir('taste'), 'taste.md')
+      fs.writeFileSync(tasteFile, '# Personal engineering taste\n- No duplication.\n')
+    })
+
+    test('--taste lists the file last, with kind "taste", after every repo rule file', () => {
+      const result = discover(['--taste', tasteFile])
+      assert.equal(result.status, 0, result.stderr)
+      const sources = JSON.parse(result.stdout)
+      assert.deepEqual(sources.at(-1), { path: tasteFile, kind: 'taste' })
+      assert.equal(sources.filter(source => source.kind === 'taste').length, 1)
+    })
+
+    test('LENS_REVIEW_TASTE is the default when no --taste is passed, and --taste beats it', () => {
+      const fromEnv = JSON.parse(discover([], { LENS_REVIEW_TASTE: tasteFile }).stdout)
+      assert.deepEqual(fromEnv.at(-1), { path: tasteFile, kind: 'taste' })
+      const otherTaste = path.join(path.dirname(tasteFile), 'other.md')
+      fs.writeFileSync(otherTaste, '# other\n')
+      const fromFlag = JSON.parse(discover(['--taste', otherTaste], { LENS_REVIEW_TASTE: tasteFile }).stdout)
+      assert.deepEqual(fromFlag.filter(source => source.kind === 'taste'), [{ path: otherTaste, kind: 'taste' }])
+    })
+
+    test('without --taste or LENS_REVIEW_TASTE, nothing under ~/.claude is listed', () => {
+      const result = discover([])
+      assert.equal(result.status, 0, result.stderr)
+      const sources = JSON.parse(result.stdout)
+      assert.ok(!sources.some(source => source.kind === 'taste'))
+      assert.ok(!sources.some(source => source.path.includes(homeWithClaudeDir)))
+    })
+
+    test('fails naming a taste file that does not exist, rather than casting without it', () => {
+      const result = discover(['--taste', path.join(homeWithClaudeDir, 'missing.md')])
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /lens-review: taste file not found: .*missing\.md/)
+    })
+  })
+
   test('CLI exits non-zero when --repo does not exist', () => {
     const result = runScript('node', [DISCOVER_RULE_SOURCES, '--repo', '/nonexistent/repo', 'a.ts'])
     assert.notEqual(result.status, 0)
@@ -1300,7 +1348,7 @@ describe('collect-findings.mjs', () => {
     fs.writeFileSync(path.join(runDir, 'reply-maintainer.txt'), '```json\n' + JSON.stringify([withoutReviewer]) + '\n```')
     const result = collect('anthropic=Anthropic', 'maintainer=The Maintainer')
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), { failedReviewers: [], droppedFindings: 0, findings: 2 })
+    assert.deepEqual(JSON.parse(result.stdout), { failedReviewers: [], droppedFindings: 0, prechecks: 0, findings: 2 })
     const merged = JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8'))
     assert.deepEqual(merged.map(written => written.reviewers), [['Anthropic'], ['The Maintainer']])
     assert.ok(fs.existsSync(path.join(runDir, 'findings-maintainer.json')))
@@ -1313,6 +1361,27 @@ describe('collect-findings.mjs', () => {
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(JSON.parse(result.stdout).failedReviewers, ['The Architect', 'The Reuse Scout'])
     assert.match(result.stderr, /failed reviewer: .*reply-reuse-scout\.txt/)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8')).length, 1)
+  })
+
+  test('merges the precheck findings in precheck.json like any reviewer\'s, credited to Precheck', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
+    const precheckFinding = { ...finding({ line: 40, category: 'tests', reviewer: 'Precheck' }), check: 'untested-failure-path' }
+    fs.writeFileSync(path.join(runDir, 'precheck.json'), JSON.stringify([precheckFinding]))
+    const result = collect('anthropic=Anthropic')
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).prechecks, 1)
+    const merged = JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8'))
+    const fromPrecheck = merged.find(written => written.reviewers.includes('Precheck'))
+    assert.equal(fromPrecheck.check, 'untested-failure-path')
+  })
+
+  test('lists Precheck as a failed reviewer when precheck.json is not a findings array, and merges the rest', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
+    fs.writeFileSync(path.join(runDir, 'precheck.json'), '{"not": "an array"}')
+    const result = collect('anthropic=Anthropic')
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).failedReviewers, ['Precheck'])
     assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8')).length, 1)
   })
 
@@ -1435,24 +1504,33 @@ describe('discover-plan-docs.mjs', () => {
     )
   })
 
-  test('finds the plan and intent docs the PR changes, and nothing else', () => {
+  test('finds the plan and intent docs the PR changes, and nothing else, as the PR\'s own', () => {
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [], fromPr: ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'] })
   })
 
-  test('puts a plan the caller passes first, and lists each path once', () => {
+  test('lists a plan the caller passes apart from the PR\'s own, once each', () => {
     const passedPlan = path.join(inputDir, 'tech-design.md')
     fs.writeFileSync(passedPlan, '# Plan\n')
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', passedPlan, '--plan', passedPlan])
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), [passedPlan, 'docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [passedPlan], fromPr: ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'] })
   })
 
-  test('returns [] for a PR that changes no plan doc', () => {
+  test('a passed plan the PR itself changes stays the PR\'s own: passing it does not vouch for the PR\'s edits', () => {
+    const repoDir = makeTempDir('plan-repo')
+    writeFiles(repoDir, { 'docs/tech-design-names-parents-seats.md': '# Plan\n' })
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', 'docs/tech-design-names-parents-seats.md'], { cwd: repoDir })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).passed, [])
+    assert.ok(JSON.parse(result.stdout).fromPr.includes('docs/tech-design-names-parents-seats.md'))
+  })
+
+  test('returns no plan docs for a PR that changes none', () => {
     fs.writeFileSync(filesPath, 'src/a.ts\n')
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
-    assert.deepEqual(JSON.parse(result.stdout), [])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [], fromPr: [] })
   })
 
   test('fails naming a passed plan that does not exist, rather than reviewing without it', () => {

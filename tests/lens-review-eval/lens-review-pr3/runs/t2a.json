@@ -1,0 +1,121 @@
+[
+  {
+    "id": "T1",
+    "file": "skills/lens-review/scripts/merge-findings.mjs",
+    "line": 116,
+    "severity": "should",
+    "category": "correctness"
+  },
+  {
+    "id": "T2",
+    "file": "skills/lens-review/scripts/discover-plan-docs.mjs",
+    "line": 12,
+    "severity": "should",
+    "category": "security"
+  },
+  {
+    "id": "T3",
+    "file": "tests/lens-review-scripts.test.mjs",
+    "line": 1340,
+    "severity": "should",
+    "category": "tests"
+  },
+  {
+    "id": "T4",
+    "file": "skills/lens-review/scripts/parse-reply.mjs",
+    "line": 55,
+    "severity": "suggestion",
+    "category": "maintainability"
+  },
+  {
+    "id": "T5",
+    "file": "tests/lens-review-scripts.test.mjs",
+    "line": 1409,
+    "severity": "suggestion",
+    "category": "tests"
+  },
+  {
+    "id": "T6",
+    "file": "skills/lens-review/scripts/build-pr-review.mjs",
+    "line": 32,
+    "severity": "should",
+    "category": "correctness"
+  },
+  {
+    "id": "T7",
+    "file": "skills/lens-review/scripts/merge-findings.mjs",
+    "line": 139,
+    "severity": "suggestion",
+    "category": "maintainability"
+  },
+  {
+    "id": "T8",
+    "file": "skills/lens-review/scripts/discover-plan-docs.mjs",
+    "line": 12,
+    "severity": "should",
+    "category": "correctness"
+  },
+  {
+    "id": "T9",
+    "file": "skills/lens-review/SKILL.md",
+    "line": 192,
+    "severity": "should",
+    "category": "security"
+  },
+  {
+    "id": "T10",
+    "file": "skills/lens-review/scripts/apply-skeptic.mjs",
+    "line": 36,
+    "severity": "suggestion",
+    "category": "correctness"
+  },
+  {
+    "id": "T11",
+    "file": "tests/lens-review-scripts.test.mjs",
+    "line": 446,
+    "severity": "should",
+    "category": "tests"
+  },
+  {
+    "id": "T12",
+    "file": "tests/lens-review-scripts.test.mjs",
+    "line": 1200,
+    "severity": "suggestion",
+    "category": "tests"
+  },
+  {
+    "id": "T13",
+    "file": "tests/lens-review-scripts.test.mjs",
+    "line": 1373,
+    "severity": "suggestion",
+    "category": "tests"
+  },
+  {
+    "id": "T14",
+    "file": "skills/lens-review/scripts/collect-votes.mjs",
+    "line": 16,
+    "severity": "should",
+    "category": "duplication"
+  },
+  {
+    "id": "T15",
+    "file": "skills/lens-review/scripts/merge-findings.mjs",
+    "line": 177,
+    "severity": "suggestion",
+    "category": "maintainability"
+  },
+  {
+    "id": "T16",
+    "file": "tests/lens-review-scripts.test.mjs",
+    "line": 1300,
+    "severity": "suggestion",
+    "category": "maintainability"
+  },
+  {
+    "id": "T17",
+    "file": "skills/lens-review/scripts/collect-findings.mjs",
+    "line": 25,
+    "severity": "should",
+    "category": "duplication"
+  }
+]
