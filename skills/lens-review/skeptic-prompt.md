@@ -18,6 +18,8 @@ You MUST rule explicitly on every finding with "contested": true. The team's dis
 
 Never drop a finding because another finding repeats it. Merging repeats was done before you, and two findings that look alike can carry different evidence (a pointer to the existing code, a different reviewer's lens). Rule on each one by the four checks above alone.
 
+Never drop a finding about real people's personal details because nothing proves the people are real. A diff can't show that, and placeholders cost nothing: keep it when the names come with a relationship, a schedule or contact details, unless the repo or the PR says those people are invented.
+
 FINDINGS:
 <<<TALLIED_FINDINGS_JSON>>>
 

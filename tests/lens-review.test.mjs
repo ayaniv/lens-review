@@ -214,6 +214,12 @@ describe('skill layout', () => {
     assert.match(readText(path.join(SKILL_DIR, 'reviewer-deep-pass-prompt.md')), rule)
   })
 
+  // A live carpool run raised exactly that must-level case, and the skeptic dropped it
+  // because "nothing shows they are real people", which no diff can ever show.
+  test('the skeptic never drops a personal-details finding for lack of proof the people are real', () => {
+    assert.match(readText(SKEPTIC_PROMPT), /Never drop a finding about real people's personal details because nothing proves the people are real/)
+  })
+
   // A live carpool run lost its whole review to a skeptic that skipped 2 of 23 ids.
   test('asks the skeptic once for the ids it left unruled before stopping', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
