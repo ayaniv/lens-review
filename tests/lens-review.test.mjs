@@ -103,6 +103,7 @@ describe('skill layout', () => {
       'scripts/collect-votes.mjs',
       'scripts/apply-skeptic.mjs',
       'scripts/discover-plan-docs.mjs',
+      'scripts/precheck.mjs',
       'checklist.md',
       'casting-prompt.md',
       'challenge-prompt.md',
@@ -292,6 +293,16 @@ describe('team', () => {
     assert.match(postStep, /scripts\/build-pr-review\.mjs/)
     assert.match(postStep, /Never retry/)
     assert.ok(postStep.includes(REVIEW_MARKER), 'the earlier-review check must look for the marker build-pr-review.mjs writes')
+  })
+
+  test('runs the prechecks in Step 1 at the head under review, and carries them into the merge and the telemetry', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const gatherStep = skill.slice(skill.indexOf('## Step 1 '), skill.indexOf('## Step 1b'))
+    assert.match(gatherStep, /scripts\/precheck\.mjs" "<RUN_DIR>" --repo \./)
+    assert.match(gatherStep, /--plan/, 'the prechecks must see the plan docs the caller passes')
+    const collectStep = skill.slice(skill.indexOf('**Collect.**'), skill.indexOf('## Step 3'))
+    assert.match(collectStep, /precheck\.json/)
+    assert.match(skill, /^Prechecks: /m, 'the telemetry must say what the prechecks found')
   })
 
   test('gives the plan docs to the Domain Expert and the Data Steward, whose findings depend on the plan', () => {

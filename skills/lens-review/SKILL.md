@@ -14,7 +14,7 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 **Arguments.** `--base <ref>` (default: the remote's default branch, else a local `main`, else `master`), an optional GitHub PR URL, `--plan <path>` (repeatable: a plan or intent doc for this work that the PR doesn't carry itself, e.g. a task's `INTENT.md` or `tech-design.md`), and `--recast` (cast a fresh team even if one is saved).
 
-**Turns.** Each turn you take costs wall time, so make independent calls in one message: in Step 1, `gh pr view` with `gh pr diff`, then `discover-rule-sources.mjs`, `discover-plan-docs.mjs` and `team-dir.mjs` together once `RUN_DIR` exists. When agents run in parallel, wait until every one has answered before running that phase's script, rather than acting on each completion as it arrives.
+**Turns.** Each turn you take costs wall time, so make independent calls in one message: in Step 1, `gh pr view` with `gh pr diff`, then `head.txt`, `discover-rule-sources.mjs`, `discover-plan-docs.mjs`, `precheck.mjs` and `team-dir.mjs` together once `RUN_DIR` exists. When agents run in parallel, wait until every one has answered before running that phase's script, rather than acting on each completion as it arrives.
 
 **Failure rule.** Every script exits non-zero with a `lens-review:` message naming the bad input. When one does, stop and show that message; never continue past a failed step.
 
@@ -40,6 +40,12 @@ Find the plan this PR implements, adding one `--plan "<path>"` per `--plan` argu
 node "<SKILL_DIR>/scripts/discover-plan-docs.mjs" --files "<RUN_DIR>/files.txt"
 ```
 `scripts/discover-plan-docs.mjs` returns the paths of the plan and intent docs the PR changes, plus the passed ones: `PLAN_DOCS`. It may be `[]`.
+
+Run the deterministic pre-checks, once `head.txt` is written, with the same `--plan` arguments:
+```bash
+node "<SKILL_DIR>/scripts/precheck.mjs" "<RUN_DIR>" --repo . [--plan "<path>"]...
+```
+`scripts/precheck.mjs` writes `precheck.json`: candidate findings a script can find for sure (an error message no test mentions, a block the diff adds twice, code the diff leaves with no caller, a migration that sorts before one already merged or after a planned one, a field from parsed JSON used as a string with no type check). Each is credited to `Precheck` and names its `check`. It prints `{findings, byCheck, failedChecks, ms}`; keep it for the telemetry. A check that throws is listed in `failedChecks` and the others still run. Never re-derive or restate a check's rule here; the scripts are the one place they live.
 
 ---
 
@@ -152,7 +158,7 @@ Check the PR against them: what its part of the plan requires, and what the plan
 ```bash
 node "<SKILL_DIR>/scripts/collect-findings.mjs" "<RUN_DIR>" "anthropic=Anthropic" "<persona-file-stem>=<persona name>"...
 ```
-Pass one `<stem>=<reviewer>` per agent you spawned, the reviewer being the name its prompt gives it, so a finding that leaves out `reviewer` is still credited to the agent that wrote it. `scripts/collect-findings.mjs` writes `findings-<stem>.json` per reviewer and `merged.json`, and prints `{failedReviewers, droppedFindings, findings}`: a reviewer whose reply file is missing or isn't a findings array is a **failed reviewer**, and the rest still merge. The merge (`scripts/merge-findings.mjs`) folds the same issue flagged by several reviewers into one finding with an `F<n>` id, and drops malformed findings, including any whose file isn't in the diff or whose line falls outside its changed hunks; stderr lists each one. Carry `failedReviewers` and `droppedFindings` into the telemetry. Never re-derive or restate the dedup rule here; the script is the one place it lives.
+Pass one `<stem>=<reviewer>` per agent you spawned, the reviewer being the name its prompt gives it, so a finding that leaves out `reviewer` is still credited to the agent that wrote it. It also merges `<RUN_DIR>/precheck.json`, so the precheck findings go through the challenge round and the skeptic like any reviewer's. `scripts/collect-findings.mjs` writes `findings-<stem>.json` per reviewer and `merged.json`, and prints `{failedReviewers, droppedFindings, prechecks, findings}`: a reviewer whose reply file is missing or isn't a findings array is a **failed reviewer**, and the rest still merge. The merge (`scripts/merge-findings.mjs`) folds the same issue flagged by several reviewers into one finding with an `F<n>` id, and drops malformed findings, including any whose file isn't in the diff or whose line falls outside its changed hunks; stderr lists each one. Carry `failedReviewers` and `droppedFindings` into the telemetry. Never re-derive or restate the dedup rule here; the script is the one place it lives.
 
 ---
 
@@ -271,6 +277,7 @@ Cost breakdown (spawned agents only; this orchestrating session's own turns are 
   Skeptic           (Opus):    ~Xk tokens   ~USD 0.XX
   Total subagent:              ~Xk tokens   ~$X.XX
 Challenge round: <n> personas voted (continued|fresh), <k> contested   | or: Challenge round: skipped (0 findings)
+Prechecks: <findings> findings (<byCheck, e.g. untested-failure-path 1, migration-order 1>) in <ms> ms; failed checks: <failedChecks, or none>
 Failed reviewers: <names, or none>
 Dropped: <N> malformed findings, <M> votes
 ```

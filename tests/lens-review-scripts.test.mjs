@@ -1300,7 +1300,7 @@ describe('collect-findings.mjs', () => {
     fs.writeFileSync(path.join(runDir, 'reply-maintainer.txt'), '```json\n' + JSON.stringify([withoutReviewer]) + '\n```')
     const result = collect('anthropic=Anthropic', 'maintainer=The Maintainer')
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), { failedReviewers: [], droppedFindings: 0, findings: 2 })
+    assert.deepEqual(JSON.parse(result.stdout), { failedReviewers: [], droppedFindings: 0, prechecks: 0, findings: 2 })
     const merged = JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8'))
     assert.deepEqual(merged.map(written => written.reviewers), [['Anthropic'], ['The Maintainer']])
     assert.ok(fs.existsSync(path.join(runDir, 'findings-maintainer.json')))
@@ -1313,6 +1313,27 @@ describe('collect-findings.mjs', () => {
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(JSON.parse(result.stdout).failedReviewers, ['The Architect', 'The Reuse Scout'])
     assert.match(result.stderr, /failed reviewer: .*reply-reuse-scout\.txt/)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8')).length, 1)
+  })
+
+  test('merges the precheck findings in precheck.json like any reviewer\'s, credited to Precheck', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
+    const precheckFinding = { ...finding({ line: 40, category: 'tests', reviewer: 'Precheck' }), check: 'untested-failure-path' }
+    fs.writeFileSync(path.join(runDir, 'precheck.json'), JSON.stringify([precheckFinding]))
+    const result = collect('anthropic=Anthropic')
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).prechecks, 1)
+    const merged = JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8'))
+    const fromPrecheck = merged.find(written => written.reviewers.includes('Precheck'))
+    assert.equal(fromPrecheck.check, 'untested-failure-path')
+  })
+
+  test('lists Precheck as a failed reviewer when precheck.json is not a findings array, and merges the rest', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
+    fs.writeFileSync(path.join(runDir, 'precheck.json'), '{"not": "an array"}')
+    const result = collect('anthropic=Anthropic')
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).failedReviewers, ['Precheck'])
     assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8')).length, 1)
   })
 
