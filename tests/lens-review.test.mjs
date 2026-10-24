@@ -2,6 +2,7 @@ import { describe, test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { currentVariant } from '../skills/lens-review/scripts/lib/variant.mjs'
 import {
   REPO_ROOT,
   SCRIPTS_DIR,
@@ -682,8 +683,23 @@ describe('seeded PR fixture', () => {
   })
 })
 
+// The Challenge round: line the live eval expects from the variant it runs under: the vote
+// count when the variant has the round, the skip form otherwise (the default, d).
+function expectedChallengeLine(variant) {
+  return variant.challengeRound
+    ? /^Challenge round: \d+ personas voted/m
+    : new RegExp(`^Challenge round: skipped \\(variant ${variant.name}\\)`, 'm')
+}
+
 describe('live eval against the seeded PR', () => {
   const isLiveEvalEnabled = process.env.RUN_LIVE_EVAL === '1'
+
+  test('expects the Challenge round: line of the variant it runs under, the default included', () => {
+    const defaultLine = expectedChallengeLine(currentVariant({}))
+    assert.match('Challenge round: skipped (variant d)', defaultLine)
+    assert.doesNotMatch('Challenge round: 3 personas voted (continued), 0 contested', defaultLine)
+    assert.match('Challenge round: 3 personas voted (continued), 0 contested', expectedChallengeLine(currentVariant({ LENS_REVIEW_VARIANT: 'a' })))
+  })
 
   test(
     'catches every seeded issue and drops the seeded non-issue',
@@ -698,7 +714,8 @@ describe('live eval against the seeded PR', () => {
       })
       assert.equal(review.status, 0, review.stderr)
       assert.match(review.stdout, /^Panel: .*Guardian/m, 'the frontend change did not bring the Guardian onto the panel')
-      assert.match(review.stdout, /^Challenge round: \d+ personas voted/m, 'the team challenge round did not run')
+      const variant = currentVariant()
+      assert.match(review.stdout, expectedChallengeLine(variant), `no Challenge round: line for variant ${variant.name}`)
       const findingsPath = review.stdout.match(/^Findings JSON: (.+)$/m)?.[1]
       assert.ok(findingsPath, 'report does not print the "Findings JSON: <path>" line')
       const score = runScript('node', [
