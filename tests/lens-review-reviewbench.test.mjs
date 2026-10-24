@@ -445,7 +445,7 @@ describe('reviewbench/run-case.sh — one gated, isolated live review', () => {
   test('refuses before starting claude when no run is approved', () => {
     const result = runCase(writeFakeClaude(binDir, { skillDir: SKILL_DIR }))
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /approval\.json/)
+    assert.match(result.stderr, /^lens-review: .*approval\.json/m)
     assert.equal(fs.existsSync(argsFile), false)
     assert.deepEqual(readLedger(workDir), [])
   })
@@ -486,6 +486,7 @@ describe('reviewbench/run-case.sh — one gated, isolated live review', () => {
     fs.rmSync(argsFile)
     const second = runCase(claudePath)
     assert.notEqual(second.status, 0)
+    assert.match(second.stderr, /^lens-review: .*count/m)
     assert.equal(fs.existsSync(argsFile), false)
   })
 
@@ -494,7 +495,7 @@ describe('reviewbench/run-case.sh — one gated, isolated live review', () => {
     const toolUses = [{ name: 'Bash', input: { command: `curl https://api.github.com/repos/${NWO}/pulls/${PR_NUMBER}/comments` } }]
     const result = runCase(writeFakeClaude(binDir, { skillDir: SKILL_DIR, toolUses }))
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /github/i)
+    assert.match(result.stderr, /^lens-review: .*github/im)
     assert.equal(fs.existsSync(path.join(workDir, 'runs', 'pilot', 'findings', `${key}.json`)), false)
     assert.equal(readLedger(workDir).at(-1).event, 'end')
   })
@@ -503,7 +504,7 @@ describe('reviewbench/run-case.sh — one gated, isolated live review', () => {
     writeApproval(workDir, { review: { count: 1, maxUsd: 10 } })
     const result = runCase(writeFakeClaude(binDir, { skillDir: '/somewhere/else/lens-review' }))
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /lens-review/)
+    assert.match(result.stderr, /^lens-review: .*\/somewhere\/else\/lens-review/m)
     assert.equal(fs.existsSync(path.join(workDir, 'runs', 'pilot', 'findings', `${key}.json`)), false)
   })
 })
@@ -534,7 +535,7 @@ describe('reviewbench/run-judge.sh — one gated judge run', () => {
     writeApproval(workDir, { review: { count: 2, maxUsd: 10 } })
     const result = runJudge()
     assert.notEqual(result.status, 0)
-    assert.match(result.stderr, /judge/)
+    assert.match(result.stderr, /^lens-review: .*judge/m)
     assert.equal(fs.existsSync(argsFile), false)
   })
 
@@ -556,7 +557,9 @@ describe('reviewbench/run-judge.sh — one gated judge run', () => {
 
   test('refuses a run whose findings outnumber the approved judge count', () => {
     writeApproval(workDir, { judge: { count: 1, maxUsd: 5 } })
-    assert.notEqual(runJudge().status, 0)
+    const result = runJudge()
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /^lens-review: .*count/m)
     assert.equal(fs.existsSync(argsFile), false)
   })
 })
