@@ -1,4 +1,4 @@
-You are a skeptical senior engineer. Below are code review findings from a team of reviewers, with the team's own votes on each one.
+You are a skeptical senior engineer. Below are code review findings from a team of reviewers. Each finding's evidence is its reviewer's `description` and the `rule` it cites: check that evidence against the diff.
 
 The diff is at <RUN_DIR>/diff.patch. Read it.
 
@@ -14,7 +14,7 @@ For each finding, check:
 3. Is the finding a false positive from a reviewer applying their lens too broadly?
 4. Do the APPROVED PLAN DOCS explicitly require the specific behaviour the finding objects to, not just touch the same topic? Then drop it, but never a correctness or security finding: a plan asking for a behaviour does not make a bug in it correct, so keep those whatever any plan says.
 
-You MUST rule explicitly on every finding with "contested": true. The team's disputes are evidence, not a veto: keep a contested finding when the diff proves it, drop it when the dispute holds.
+<<<TEAM_VOTES>>>
 
 Never drop a finding because another finding repeats it. Merging repeats was done before you, and two findings that look alike can carry different evidence (a pointer to the existing code, a different reviewer's lens). Rule on each one by the four checks above alone.
 

@@ -211,6 +211,26 @@ describe('the A/B variants (LENS_REVIEW_VARIANT)', () => {
     }
   })
 
+  test('skeptic: with no challenge round, the prompt asks it to weigh each reviewer\'s own evidence, not votes', () => {
+    writeFiles(runDir, { 'tallied.json': JSON.stringify([{ id: 'F1', file: 'a.js', line: 1, contested: false }]) })
+    const env = { ...process.env, LENS_REVIEW_VARIANT: 'd' }
+    const result = runScript('node', [RENDER_PROMPTS, runDir, teamDir, '--phase', 'skeptic'], { env })
+    assert.equal(result.status, 0, result.stderr)
+    const skeptic = readText(path.join(runDir, 'prompt-skeptic.txt'))
+    assert.doesNotMatch(skeptic, UNFILLED_RE)
+    assert.doesNotMatch(skeptic, /team's own votes|"contested": true/)
+    assert.match(skeptic, /no challenge round/i)
+    assert.match(skeptic, /`description` and the `rule` it cites/)
+  })
+
+  test('skeptic: with the challenge round, it still rules on every contested finding', () => {
+    writeFiles(runDir, { 'tallied.json': JSON.stringify([{ id: 'F1', file: 'a.js', line: 1, contested: true }]) })
+    runScript('node', [RENDER_PROMPTS, runDir, teamDir, '--phase', 'skeptic'], { env: { ...process.env, LENS_REVIEW_VARIANT: 'a' } })
+    const skeptic = readText(path.join(runDir, 'prompt-skeptic.txt'))
+    assert.match(skeptic, /team's own votes/)
+    assert.match(skeptic, /MUST rule explicitly on every finding with "contested": true/)
+  })
+
   test('an unknown variant fails naming it, rather than silently running the default', () => {
     const result = renderAs('z')
     assert.notEqual(result.status, 0)

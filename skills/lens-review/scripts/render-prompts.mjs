@@ -142,9 +142,16 @@ function listOrNone(paths) {
   return paths.length > 0 ? paths.join('\n') : 'none'
 }
 
-function skepticPrompt(runDir) {
+// Without a challenge round there are no votes, so the skeptic must not be told to weigh them.
+const TEAM_VOTES = {
+  withChallengeRound: 'Each finding also carries the team\'s own votes on it (`challenge`). You MUST rule explicitly on every finding with "contested": true. The team\'s disputes are evidence, not a veto: keep a contested finding when the diff proves it, drop it when the dispute holds.',
+  withoutChallengeRound: 'There was no challenge round, so the findings carry no team votes: rule on each one from the diff and its reviewer\'s evidence alone.',
+}
+
+function skepticPrompt(runDir, variant) {
   const { passed, fromPr } = readPlanDocs(runDir)
   const text = fill(template('skeptic-prompt.md'), runDir, {
+    TEAM_VOTES: variant.challengeRound ? TEAM_VOTES.withChallengeRound : TEAM_VOTES.withoutChallengeRound,
     APPROVED_PLAN_DOCS: listOrNone(passed),
     UNVERIFIED_PLAN_DOCS: listOrNone(fromPr),
     TALLIED_FINDINGS_JSON: JSON.stringify(readJsonArrayFile(path.join(runDir, 'tallied.json')), null, 2),
@@ -181,7 +188,7 @@ function render(phase, runDir, teamDir) {
       return { voters: prompts.map(({ stem, voter, reviewer }) => ({ stem: voter, reviewer, promptPath: promptPath(runDir, stem) })) }
     }
     case 'skeptic': {
-      const prompt = skepticPrompt(runDir)
+      const prompt = skepticPrompt(runDir, variant)
       writePrompts(runDir, [prompt])
       return { model: SKEPTIC_MODEL, promptPath: promptPath(runDir, prompt.stem) }
     }
