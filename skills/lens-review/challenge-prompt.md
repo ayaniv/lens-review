@@ -9,6 +9,6 @@ Vote only where you have a grounded opinion: skip a finding entirely when it is 
 MERGED FINDINGS:
 <<<MERGED_FINDINGS>>>
 
-Return ONLY JSON, no other text and no code fence:
+Write ONLY JSON to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence, then answer `done`.
 {"persona": "<your persona name, exactly as in your persona file>", "votes": [{"id": "F<n>", "verdict": "agree" | "dispute", "reason": "<one sentence>"}]}
-Return `"votes": []` if you have no grounded opinion on any finding.
+Write `"votes": []` if you have no grounded opinion on any finding.

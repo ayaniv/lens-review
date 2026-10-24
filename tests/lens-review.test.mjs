@@ -99,6 +99,10 @@ describe('skill layout', () => {
       'scripts/validate-team.mjs',
       'scripts/select-team.mjs',
       'scripts/build-pr-review.mjs',
+      'scripts/collect-findings.mjs',
+      'scripts/collect-votes.mjs',
+      'scripts/apply-skeptic.mjs',
+      'scripts/discover-plan-docs.mjs',
       'checklist.md',
       'casting-prompt.md',
       'challenge-prompt.md',
@@ -136,16 +140,27 @@ describe('skill layout', () => {
     }
   })
 
-  test('every agent prompt forbids a code fence, and every reply goes through parse-reply.mjs', () => {
+  test('every agent writes its own reply file, with no code fence, and every reply goes through parse-reply.mjs', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
-    for (const [name, text] of [['SKILL.md', skill], ['casting-prompt.md', readText(CASTING_PROMPT)], ['challenge-prompt.md', readText(CHALLENGE_PROMPT)]]) {
-      for (const returnLine of text.match(/^Return ONLY.*$/gm)) {
-        assert.match(returnLine, /no code fence/, `${name}: "${returnLine}"`)
+    const prompts = [['SKILL.md', skill, 3], ['casting-prompt.md', readText(CASTING_PROMPT), 1], ['challenge-prompt.md', readText(CHALLENGE_PROMPT), 1]]
+    for (const [name, text, agentCount] of prompts) {
+      assert.doesNotMatch(text, /^Return ONLY/m, `${name}: an agent still hands its JSON back in its message`)
+      const writeLines = text.match(/^Write ONLY.*$/gm) ?? []
+      assert.equal(writeLines.length, agentCount, `${name}: expected ${agentCount} reply instructions`)
+      for (const writeLine of writeLines) {
+        assert.match(writeLine, /to <<<REPLY_FILE>>> with the Write tool, no other text and no code fence/, `${name}: "${writeLine}"`)
       }
     }
-    for (const output of ['findings-<agent>.json', 'votes-<persona-file-stem>.json', 'skeptic.json', 'cast.json']) {
-      assert.match(skill, new RegExp(`parse-reply\\.mjs" "[^"]+" "<RUN_DIR>/${output.replace(/[.<>]/g, '\\$&')}"`), `${output} is not written by parse-reply.mjs`)
-    }
+    assert.match(skill, /never copy a reply out of an agent's message or transcript/)
+    assert.match(skill, /parse-reply\.mjs" "<RUN_DIR>\/reply-cast\.txt" "<RUN_DIR>\/cast\.json"/, 'cast.json is not written by parse-reply.mjs')
+  })
+
+  test('runs each phase\'s deterministic tail as one script call, never by hand', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.match(skill, /scripts\/collect-findings\.mjs" "<RUN_DIR>" "anthropic=Anthropic"/)
+    assert.match(skill, /scripts\/collect-votes\.mjs" "<RUN_DIR>"/)
+    assert.match(skill, /scripts\/apply-skeptic\.mjs" "<RUN_DIR>"/)
+    assert.doesNotMatch(skill, /final-findings\.json` with `Write`/, 'final-findings.json must come from a script')
   })
 
   test("the skeptic rules on each finding's own merits and never drops one for repeating another", () => {
@@ -154,8 +169,37 @@ describe('skill layout', () => {
     assert.match(skepticPrompt, /Never drop a finding because another finding repeats it/)
   })
 
+  test('the skeptic reads the plan and drops a finding that objects to what the plan requires', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const skepticPrompt = skill.slice(skill.indexOf('You are a skeptical senior engineer.'), skill.indexOf('<<<TALLIED_FINDINGS_JSON>>>'))
+    assert.ok(skepticPrompt.includes('<<<PLAN_DOCS>>>'))
+    assert.match(skepticPrompt, /Does the plan or design doc this PR implements require what the finding objects to\?/)
+  })
+
+  test('runs one general reviewer, which also covers test strength, with no second generic one', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.doesNotMatch(skill, /Generic-PR/)
+    const generalPrompt = skill.slice(skill.indexOf('### A. Anthropic-general reviewer'), skill.indexOf('### B. '))
+    assert.match(generalPrompt, /Tests that pass for the wrong reason/)
+    assert.match(generalPrompt, /reviewer: "Anthropic"/)
+  })
+
+  test('keeps role framing only where it steers: the skeptic\'s stance and each persona\'s name', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const generalPrompt = skill.slice(skill.indexOf('### A. Anthropic-general reviewer'), skill.indexOf('### B. '))
+    assert.doesNotMatch(generalPrompt, /You are a senior/)
+    assert.match(skill, /^You are <<<PERSONA_NAME>>>, one reviewer on a team\./m)
+    assert.match(skill, /^You are a skeptical senior engineer\./m)
+  })
+
   test('never assigns Sonnet to any step', () => {
     assert.doesNotMatch(readText(path.join(SKILL_DIR, 'SKILL.md')), /sonnet/i)
+  })
+
+  test('has no dollar sign before a digit, which Claude Code replaces with a skill argument', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const argumentPlaceholders = skill.split('\n').filter(line => /\$\d/.test(line))
+    assert.deepEqual(argumentPlaceholders, [])
   })
 
   test('states its per-run cost budget', () => {
@@ -248,6 +292,20 @@ describe('team', () => {
     assert.match(postStep, /scripts\/build-pr-review\.mjs/)
     assert.match(postStep, /Never retry/)
     assert.ok(postStep.includes(REVIEW_MARKER), 'the earlier-review check must look for the marker build-pr-review.mjs writes')
+  })
+
+  test('gives the plan docs to the Domain Expert and the Data Steward, whose findings depend on the plan', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.match(skill, /scripts\/discover-plan-docs\.mjs" --files "<RUN_DIR>\/files\.txt"/)
+    const personaPrompt = skill.slice(skill.indexOf('### B. One persona agent'), skill.indexOf('**Collect.**'))
+    assert.ok(personaPrompt.includes('<<<PLAN_NOTE>>>'))
+    assert.match(personaPrompt, /the persona is The Domain Expert or The Data Steward/)
+  })
+
+  test('the Data Steward keeps migrations in order with the planned and unmerged ones', async () => {
+    const { parsePersona } = await import(VALIDATE_TEAM)
+    const { rules } = parsePersona(readText(path.join(TEAM_DIR, 'data-steward.md')))
+    assert.ok(rules.some(rule => rule.severity === 'must' && /timestamp sorts after every migration already merged and before none that is planned or still unmerged/.test(rule.text)))
   })
 
   test('has a challenge prompt that shows the team the merged findings', () => {

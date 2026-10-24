@@ -19,4 +19,5 @@ Rules:
 - [should] A new query filters or sorts on indexed columns; flag a new access pattern with no supporting index.
 - [should] A schema change that needs existing rows updated ships a backfill, and the code tolerates both old and new shapes while it runs.
 - [should] Destructive changes (dropping a column or table, narrowing a type) are deployed after the code stops using them.
+- [must] A new migration's timestamp sorts after every migration already merged and before none that is planned or still unmerged; check the migrations directory and the plan docs. A later timestamp that ships first makes migration tools refuse or skip the earlier one.
 - Do not flag application code outside data access.
