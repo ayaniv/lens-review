@@ -86,27 +86,35 @@ describe('reviewbench/to-reviewbench.mjs — lens-review findings in the judge\'
     assert.throws(() => toReviewBenchFindings([lensFinding('F9', { line: undefined })], pr, AGENT), /F9/)
   })
 
+  test('refuses a finding with no file or no description, naming its id', () => {
+    assert.throws(() => toReviewBenchFindings([lensFinding('F8', { file: undefined })], pr, AGENT), /F8.*file/)
+    assert.throws(() => toReviewBenchFindings([lensFinding('F7', { description: '' })], pr, AGENT), /F7.*description/)
+  })
+
   test('refuses a pr without a 40-character head', () => {
     assert.throws(() => toReviewBenchFindings([lensFinding('F1')], { ...pr, head: 'abc' }, AGENT), /head/)
   })
 })
 
 // A stand-in for `claude` that records its arguments, working directory and environment, then
-// prints a lens-review run as stream-json ending in the given result event.
-function writeFakeClaude(binDir, { findings = [lensFinding('F1')], result = {}, exitCode = 0, findingsLine = true } = {}) {
+// prints a lens-review run as stream-json ending in the given result event (or none at all), with
+// any extra raw lines before it.
+function writeFakeClaude(binDir, { findings = [lensFinding('F1')], result = {}, exitCode = 0, findingsLine = true, hasResultEvent = true, extraLines = [] } = {}) {
   const runDir = makeTempDir('fake-lens-run')
   const finalFindingsPath = path.join(runDir, 'final-findings.json')
   fs.writeFileSync(finalFindingsPath, JSON.stringify(findings))
   const report = findingsLine ? `## Lens Review\n\nFindings JSON: ${finalFindingsPath}\n` : '## Lens Review\n\nNo findings file.\n'
-  const events = [
-    { type: 'system', subtype: 'init' },
-    { type: 'result', subtype: 'success', total_cost_usd: 2.5, duration_ms: 1000, result: report, ...result },
+  const resultEvent = { type: 'result', subtype: 'success', total_cost_usd: 2.5, duration_ms: 1000, result: report, ...result }
+  const lines = [
+    JSON.stringify({ type: 'system', subtype: 'init' }),
+    ...extraLines,
+    ...(hasResultEvent ? [JSON.stringify(resultEvent)] : []),
   ]
   const script = [
     '#!/usr/bin/env bash',
     'printf "%s\\n" "$@" > "$FAKE_ARGS_FILE"',
     'printf "PWD=%s\\nLENS_REVIEW_HOME=%s\\nDISABLE_TELEMETRY=%s\\nCLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=%s\\n" "$PWD" "$LENS_REVIEW_HOME" "$DISABLE_TELEMETRY" "$CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" > "$FAKE_ENV_FILE"',
-    `cat <<'EVENTS'\n${events.map(event => JSON.stringify(event)).join('\n')}\nEVENTS`,
+    `cat <<'EVENTS'\n${lines.join('\n')}\nEVENTS`,
     `exit ${exitCode}`,
   ].join('\n')
   const claudePath = path.join(binDir, 'claude')
@@ -192,6 +200,11 @@ describe('reviewbench/agent.mjs — one PR under ReviewBench\'s agent contract',
     assertRefusedBeforeClaude(runAgent(), /^lens-review: .*RB_OUT/m)
   })
 
+  test('refuses before starting claude when RB_PR_NUMBER is not a positive integer', () => {
+    env.RB_PR_NUMBER = 'seven'
+    assertRefusedBeforeClaude(runAgent(), /^lens-review: .*RB_PR_NUMBER/m)
+  })
+
   test('refuses before starting claude when the checkout is not at RB_HEAD', () => {
     git(repoDir, 'checkout', '-q', '--detach', base)
     assertRefusedBeforeClaude(runAgent(), /^lens-review: .*RB_HEAD/m)
@@ -255,6 +268,26 @@ describe('reviewbench/agent.mjs — one PR under ReviewBench\'s agent contract',
     const result = runAgent({ result: { subtype: 'error_max_budget_usd' } })
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /^lens-review: .*error_max_budget_usd/m)
+    assert.equal(fs.existsSync(env.RB_OUT), false)
+  })
+
+  test('fails without writing RB_OUT when claude\'s stream has no result event', () => {
+    const result = runAgent({ hasResultEvent: false })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /^lens-review: .*result event/m)
+    assert.equal(fs.existsSync(env.RB_OUT), false)
+  })
+
+  test('reports stream lines that are not JSON instead of skipping them silently', () => {
+    const result = runAgent({ extraLines: ['not json at all'] })
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stderr, /^lens-review: dropped 1 malformed stream line/m)
+  })
+
+  test('fails without writing RB_OUT when a kept finding cannot be converted, naming it', () => {
+    const result = runAgent({ findings: [lensFinding('F9', { line: undefined })] })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /^lens-review: .*F9/m)
     assert.equal(fs.existsSync(env.RB_OUT), false)
   })
 

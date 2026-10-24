@@ -1,0 +1,6 @@
+# BuildKit's ignore file for ./Dockerfile. The context is the repo root, so everything is left
+# out except what the image copies: no .git, node_modules or local files enter the image.
+*
+!skills/lens-review/
+!tests/lens-review-eval/reviewbench/*.mjs
+**/.DS_Store
