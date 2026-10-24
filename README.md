@@ -1,8 +1,6 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
-    <img src="assets/logo-light.png" alt="Lens Review" width="300">
-  </picture>
+  <img src="assets/logo-light.png#gh-light-mode-only" alt="Lens Review" width="300">
+  <img src="assets/logo-dark.png#gh-dark-mode-only" alt="Lens Review" width="300">
 </p>
 
 # lens-review
