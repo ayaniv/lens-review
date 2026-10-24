@@ -174,9 +174,17 @@ describe('reviewbench/agent.mjs — one PR under ReviewBench\'s agent contract',
     }
   })
 
-  test('refuses before starting claude when there is no API key', () => {
+  test('refuses before starting claude when there is no credential at all', () => {
     delete env.ANTHROPIC_API_KEY
-    assertRefusedBeforeClaude(runAgent(), /^lens-review: .*ANTHROPIC_API_KEY/m)
+    assertRefusedBeforeClaude(runAgent(), /^lens-review: .*CLAUDE_CODE_OAUTH_TOKEN.*ANTHROPIC_API_KEY|^lens-review: .*ANTHROPIC_API_KEY.*CLAUDE_CODE_OAUTH_TOKEN/m)
+  })
+
+  test('runs on a Claude subscription token alone (claude setup-token), with no API key', () => {
+    delete env.ANTHROPIC_API_KEY
+    env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token-not-real'
+    const result = runAgent()
+    assert.equal(result.status, 0, result.stderr)
+    assert.ok(fs.existsSync(argsFile))
   })
 
   test('refuses before starting claude when RB_OUT is missing', () => {

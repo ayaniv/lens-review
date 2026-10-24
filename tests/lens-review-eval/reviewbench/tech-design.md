@@ -15,7 +15,7 @@ Planning first designed a host-side harness of seven files: a case fetcher, two 
 - **It's the leaderboard's path.** The same image can later be registered in the portal unchanged, which is out of scope here.
 - **Spend control already exists.** ReviewBench recommends a dedicated API key with a spend cap. On top of that, the adapter refuses to start without a per-PR budget and passes it to `claude --max-budget-usd`. That replaces the approval file and ledger.
 
-What we give up is running under your `claude` login. In the container, Claude Code authenticates with `ANTHROPIC_API_KEY`, passed in with `try-agent.sh -e ANTHROPIC_API_KEY` and never baked into the image. Docker is needed too. Both are installed on this machine (Docker 29.9, jq 1.7).
+The reviews still run on your Claude subscription (Max). `claude setup-token` creates a long-lived subscription token, which is passed in with `try-agent.sh -e CLAUDE_CODE_OAUTH_TOKEN` and never baked into the image. So reviews use plan usage, not API dollars. `ANTHROPIC_API_KEY` also works, as the fallback for anyone without a subscription. Docker is needed too. Both are installed on this machine (Docker 29.9, jq 1.7).
 
 ## Verified facts about ReviewBench
 
@@ -50,7 +50,7 @@ All new files are in `tests/lens-review-eval/reviewbench/`. `skills/lens-review/
 | File | Does | Fails loudly on |
 |---|---|---|
 | `to-reviewbench.mjs` | `toReviewBenchFindings(finalFindings, pr, agent, usage?)` → the contract's JSON. Strips a leading `./`, maps the fields, names merged copies in the message, passes `usage` (`cost_usd`, `time_in_ms`) through when given. | A finding with no file or line (the error names its id), and a `pr` without a 40-character base or head. |
-| `agent.mjs` | The container's entrypoint, in the shape of ReviewBench's `examples/codex-cli/agent.mjs`. (1) It checks `RB_NWO`, `RB_PR_NUMBER`, `RB_BASE`, `RB_HEAD`, `RB_OUT`, `ANTHROPIC_API_KEY` and `RB_CONFIG_MAX_BUDGET_USD`, which must be a positive number, and checks that the checkout's `HEAD` is `RB_HEAD`. (2) It prints the applied settings, `model=<m> max_budget_usd=<n>`, as the contract asks. (3) It runs `claude -p "/lens-review --base $RB_BASE"` in `RB_REPO` (default `/work/repo`) with `--model` (from `RB_CONFIG_MODEL`, default `claude-opus-5-5`, which is what lens-review's measured costs assume), `--output-format stream-json --verbose --max-budget-usd <n> --dangerously-skip-permissions`, and `--disallowedTools WebFetch WebSearch "Bash(gh:*)" "Bash(curl:*)" "Bash(wget:*)"`. Its environment adds a fresh `LENS_REVIEW_HOME` under the temp dir, `DISABLE_TELEMETRY=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. (4) It saves the stream log next to `RB_OUT` as `lens-review.log`, reads the result event, reads the file on its `Findings JSON:` line, and writes `RB_OUT` with `usage: {cost_usd: total_cost_usd, time_in_ms: duration_ms}`. `CLAUDE_BIN` exists only so the tests can substitute a fake. | Every failure goes through `skills/lens-review/scripts/lib/cli.mjs`'s `fail`, as a `lens-review: …` message with a non-zero exit, and no `RB_OUT` is written: a missing or invalid variable (claude is never started), a checkout at the wrong commit, claude exiting non-zero, a result event that isn't `success` (for example the budget cap), and no `Findings JSON:` line. |
+| `agent.mjs` | The container's entrypoint, in the shape of ReviewBench's `examples/codex-cli/agent.mjs`. (1) It checks `RB_NWO`, `RB_PR_NUMBER`, `RB_BASE`, `RB_HEAD`, `RB_OUT`, a credential (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`) and `RB_CONFIG_MAX_BUDGET_USD`, which must be a positive number, and checks that the checkout's `HEAD` is `RB_HEAD`. (2) It prints the applied settings, `model=<m> max_budget_usd=<n>`, as the contract asks. (3) It runs `claude -p "/lens-review --base $RB_BASE"` in `RB_REPO` (default `/work/repo`) with `--model` (from `RB_CONFIG_MODEL`, default `claude-opus-5-5`, which is what lens-review's measured costs assume), `--output-format stream-json --verbose --max-budget-usd <n> --dangerously-skip-permissions`, and `--disallowedTools WebFetch WebSearch "Bash(gh:*)" "Bash(curl:*)" "Bash(wget:*)"`. Its environment adds a fresh `LENS_REVIEW_HOME` under the temp dir, `DISABLE_TELEMETRY=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. (4) It saves the stream log next to `RB_OUT` as `lens-review.log`, reads the result event, reads the file on its `Findings JSON:` line, and writes `RB_OUT` with `usage: {cost_usd: total_cost_usd, time_in_ms: duration_ms}`. `CLAUDE_BIN` exists only so the tests can substitute a fake. | Every failure goes through `skills/lens-review/scripts/lib/cli.mjs`'s `fail`, as a `lens-review: …` message with a non-zero exit, and no `RB_OUT` is written: a missing or invalid variable (claude is never started), a checkout at the wrong commit, claude exiting non-zero, a result event that isn't `success` (for example the budget cap), and no `Findings JSON:` line. |
 | `Dockerfile` | `FROM node:22-slim`. It installs `git` and `ca-certificates` (no `gh`, no `curl`) and `@anthropic-ai/claude-code` at one exact version (2.1.310 at planning time). It copies `skills/lens-review` to `/home/node/.claude/skills/lens-review` and the two `.mjs` files to `/agent/`, then `USER node` (Claude Code refuses `--dangerously-skip-permissions` as root) and `ENTRYPOINT ["node", "/agent/agent.mjs"]`. The build context is the repo root, so the skill can be copied: `docker build --platform linux/amd64 -f tests/lens-review-eval/reviewbench/Dockerfile -t lens-review-reviewbench:dev .`. | |
 | `Dockerfile.dockerignore` | BuildKit's per-Dockerfile ignore file. It excludes everything except `skills/lens-review/` and this directory's `.mjs` files, so `.git`, `node_modules` and local files never enter the image. | |
 
@@ -65,9 +65,13 @@ All new files are in `tests/lens-review-eval/reviewbench/`. `skills/lens-review/
 
 ## Cost estimate
 
+The dollar figures below are API-equivalent. On a Max subscription, reviews draw on plan usage instead of money, and `--max-budget-usd` still caps each run by its estimated cost. A Max 5x week covers the pilot easily. A 25-PR run is heavy Opus use and can take a large share of a week's limit, so run it after a weekly reset, not in a busy week. Past the plan limit, usage credits apply only if you've turned them on, up to your monthly spend limit.
+
+The judge is separate: ReviewBench's judge calls the API through pi, so plan for it to need `ANTHROPIC_API_KEY` (about $3 for the pilot) unless pi turns out to accept a subscription login. That's unverified, so check it during the pilot.
+
 Prices: Haiku 5.5 $0.10/$0.50 per MTok (≤100K prompt, $0.50/$2.50 above), Sonnet 5 and 5.5 $2/$10, Opus 5.5 $4/$20.
 
-- **lens-review, per PR.** lens-review's README measures $1.70–2.20 per run. Every container starts with an empty `LENS_REVIEW_HOME`, so every PR also pays for casting on Opus, $0.50–0.80. That gives **about $2.2–3.0 for a PR under 500 lines and $5–10 for one over 1,000 lines**.
+- **lens-review, per PR (subscription usage on Max).** lens-review's README measures $1.70–2.20 per run. Every container starts with an empty `LENS_REVIEW_HOME`, so every PR also pays for casting on Opus, $0.50–0.80. That gives **about $2.2–3.0 for a PR under 500 lines and $5–10 for one over 1,000 lines**.
 - **Judge, per PR (Sonnet 5).** Matching costs under $0.10. Classifying unmatched findings is the bulk: about 5 per PR at roughly 60K input and 3K output tokens each, about $0.75. Total **about $0.5–1.5 per PR**. The judge reports no spend, so read it from the key's usage in the Console.
 - **3-PR pilot**: test-set indices 0 (PierreJanineh/TechDebtMCP#135, 3 lines), 4 (AA-Factory/aafactory-prototype#17, 45 lines) and 9 (k1LoW/gh-copilot-review#9, 68 lines). About $8 for review and $3 for the judge, **about $11**.
 - **25-PR test set:** about $60–150 for review and $15–40 for the judge, **about $75–190**.
@@ -85,7 +89,7 @@ The pilot records each PR's actual cost as `usage.cost_usd` in its findings file
    cd ReviewBench && mkdir -p runs/pilot && cd runs/pilot
    for i in 0 4 9; do
      TRY_AGENT_WORK=$HOME/.cache/reviewbench-try-agent ../../scripts/try-agent.sh lens-review-reviewbench:dev --pr $i \
-       -e ANTHROPIC_API_KEY -e RB_CONFIG_MAX_BUDGET_USD=4
+       -e CLAUDE_CODE_OAUTH_TOKEN -e RB_CONFIG_MAX_BUDGET_USD=4   # from `claude setup-token`
    done
    cd ../.. && mkdir -p .judge   # models.json per docs/OFFLINE_EVAL.md, registering claude-sonnet-5
    PI_CODING_AGENT_DIR=$PWD/.judge npm run judge -- --candidate runs/pilot/findings \
@@ -93,11 +97,11 @@ The pilot records each PR's actual cost as `usage.cost_usd` in its findings file
    ```
 
 3. Order: **pilot (3 PRs) → read the scores and costs → test set (25) → decide → full set**. Use a fresh run dir each time so findings never mix.
-4. Use a dedicated `ANTHROPIC_API_KEY` with a spend cap sized to the step, as ReviewBench recommends. With `RB_CONFIG_MAX_BUDGET_USD` on every PR, the cap is the hard ceiling and the budget is the per-PR one.
+4. Reviews run on the subscription token. For the judge, use a dedicated `ANTHROPIC_API_KEY` with a spend cap sized to the step, as ReviewBench recommends. `RB_CONFIG_MAX_BUDGET_USD` caps every review.
 
 ## What the developer must provide
 
-- A dedicated `ANTHROPIC_API_KEY` with a spend cap. It's used for both the reviews and the judge.
+- A subscription token from `claude setup-token` for the reviews, and a dedicated `ANTHROPIC_API_KEY` with a spend cap for the judge.
 - Running the steps above themselves, one step at a time.
 - About 2–5 GB of disk for the mirror cache of the test set, under `TRY_AGENT_WORK`, outside this repo.
 
@@ -119,7 +123,7 @@ Flat, one PR. The adapter is four small files that only work together. Merged by
 ## QA cases (all in the QA spec)
 
 - **Converter:** the field mapping; a merged finding with its other copies named in the message; stripping a leading `./`; an empty review; passing usage through; refusing a finding with no line, or a short head.
-- **Agent, refusals before claude starts:** no budget, a zero or non-numeric budget, no API key, a missing `RB_OUT`, a checkout whose `HEAD` isn't `RB_HEAD`.
-- **Agent, a run:** runs lens-review headless against `RB_BASE` from the checkout, with the model, the budget cap, stream-json, the deny list and a fresh `LENS_REVIEW_HOME`; prints the applied settings; writes `RB_OUT` in the contract's shape with `RB_AGENT`, the head, the PR number and `usage.cost_usd`; saves `lens-review.log`; an empty review is `"findings": []` with exit 0.
+- **Agent, refusals before claude starts:** no budget, a zero or non-numeric budget, no credential at all, a missing `RB_OUT`, a checkout whose `HEAD` isn't `RB_HEAD`.
+- **Agent, a run:** runs on a subscription token alone; runs lens-review headless against `RB_BASE` from the checkout, with the model, the budget cap, stream-json, the deny list and a fresh `LENS_REVIEW_HOME`; prints the applied settings; writes `RB_OUT` in the contract's shape with `RB_AGENT`, the head, the PR number and `usage.cost_usd`; saves `lens-review.log`; an empty review is `"findings": []` with exit 0.
 - **Agent, failures (no `RB_OUT` written):** claude exits non-zero; the result isn't `success` (the budget cap); no `Findings JSON:` line.
 - **Image:** pins Claude Code to an exact version; installs no `gh`; copies the skill into the node user's skills; runs as `node`; its entrypoint is `agent.mjs`; the ignore file keeps `.git` and `node_modules` out.
