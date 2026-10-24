@@ -11,6 +11,7 @@ import { newlyUnused } from '../skills/lens-review/scripts/prechecks/newly-unuse
 import { migrationOrder } from '../skills/lens-review/scripts/prechecks/migration-order.mjs'
 import { uncheckedField } from '../skills/lens-review/scripts/prechecks/unchecked-field.mjs'
 import { scoreRecall } from './lens-review-eval/score-recall.mjs'
+import { runPrechecks } from '../skills/lens-review/scripts/precheck.mjs'
 
 const PRECHECK = path.join(SCRIPTS_DIR, 'precheck.mjs')
 const EVAL_DIR = path.join(REPO_ROOT, 'tests', 'lens-review-eval')
@@ -430,4 +431,22 @@ describe('prechecks on the real-PR answer keys', () => {
       })
     })
   }
+})
+
+describe('runPrechecks', () => {
+  const finding = { file: 'a.js', line: 1, check: 'works' }
+
+  test('collects every check\'s findings when none throws', () => {
+    const result = runPrechecks({}, { works: () => [finding], empty: () => [] })
+    assert.deepEqual(result, { findings: [finding], failedChecks: [] })
+  })
+
+  test('a check that throws is reported in failedChecks, and the other checks still run', () => {
+    const result = runPrechecks({}, {
+      broken: () => { throw new Error('bad diff') },
+      works: () => [finding],
+    })
+    assert.deepEqual(result.findings, [finding])
+    assert.deepEqual(result.failedChecks, [{ check: 'broken', reason: 'bad diff' }])
+  })
 })

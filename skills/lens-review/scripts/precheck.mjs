@@ -30,10 +30,10 @@ export const CHECKS = {
 
 // A check that throws is reported and skipped: one broken heuristic must not cost the review
 // the other checks, or the reviewers' findings.
-export function runPrechecks(change) {
+export function runPrechecks(change, checks = CHECKS) {
   const findings = []
   const failedChecks = []
-  for (const [name, check] of Object.entries(CHECKS)) {
+  for (const [name, check] of Object.entries(checks)) {
     try {
       findings.push(...check(change))
     } catch (error) {
