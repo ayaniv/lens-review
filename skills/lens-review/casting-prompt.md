@@ -27,7 +27,7 @@ REPO DIRECTORIES (from `git ls-files`, trimmed to directories):
 REPO SIGNALS (stack manifests, top-level layout, README head, recent commit subjects):
 <<<REPO_SIGNALS>>>
 
-RULE SOURCES (the repo's own AGENTS.md / CLAUDE.md / cursor / copilot rule files, each headed by its path):
+RULE SOURCES (the repo's own AGENTS.md / CLAUDE.md / cursor / copilot rule files, each headed by its path, plus, when the developer opted in, their personal taste file headed `taste`):
 <<<RULE_SOURCES>>>
 
 ## What to return
@@ -39,6 +39,7 @@ RULE SOURCES (the repo's own AGENTS.md / CLAUDE.md / cursor / copilot rule files
 2. **The area personas this repo actually has.** Rewrite each one's Scope to the repo's real paths (e.g. `packages/ui/**`, `apps/web/src/**`). Drop an area persona when no directory above would match its rewritten Scope; a repo with no frontend carries no Design System Guardian. Never give an area persona `**`.
    Then rewrite its Signals for this repo. Scope says where the persona's code lives; Signals say what touching its concern looks like **anywhere else**, so the persona still joins a PR that crosses into its area from outside it. Use this repo's real names: the import specifier of its design-system package and the names of its components, its ORM's query and migration calls, its auth middleware, its config loader. For example, a Guardian whose Scope is `packages/ui/**` gets `from ['"]@acme/ui['"]` and `<(Button|Card)\b[^>]*\b(style|className)=`. Keep a base signal only when it fits this repo.
 3. **Fold rule-source rules into the persona whose lens they belong to.** Design-system rules go into The Design System Guardian, migration rules into The Data Steward, and so on. Never create a second persona for an area that already has one.
+   The `taste` file's rules fold the same way (duplication into The Reuse Scout, naming and dead code into The Maintainer, error handling into The Reliability Engineer), each ending `(source: taste)`. Skip any taste rule for a stack this repo doesn't use. When a taste rule and a repo rule conflict, the repo's own rule sources win: drop the taste rule.
 4. **0–2 project personas**, only for a theme in the rule sources that no core or area persona covers (e.g. i18n, a payments-domain rule set). Give each a Scope narrowed to the paths those rules govern and/or Signals for the code those rules govern wherever it appears, and at least one "Do not flag" rule.
 
 ## Hard rules

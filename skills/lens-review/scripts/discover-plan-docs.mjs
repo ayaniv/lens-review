@@ -4,9 +4,14 @@
 // feature would only spend the reviewers' context. A reviewer without the plan can't tell
 // that this PR overtakes a sibling milestone, or that it does exactly what the plan asked.
 //
+// The two kinds are kept apart because only one can be trusted: a passed plan was approved
+// outside the PR, while the PR's own plan docs are written by its author and are unverified.
+// A passed plan the PR itself edits counts as the PR's own.
+//
 //   node discover-plan-docs.mjs --files <files.txt> [--plan <path>]...
-//     → JSON array of paths on stdout, the passed ones first
+//     → {passed: [paths], fromPr: [paths]} on stdout
 import fs from 'node:fs'
+import path from 'node:path'
 import { fail, isRunDirectly, readTextFile } from './lib/cli.mjs'
 
 const PLAN_DOC_RE = /(^|\/)(intent|tech-design[\w.-]*|design[\w.-]*|plan[\w.-]*|spec[\w.-]*)\.md$/i
@@ -15,8 +20,16 @@ export function isPlanDoc(file) {
   return PLAN_DOC_RE.test(file)
 }
 
+function isChangedByPr(plan, changedFiles) {
+  return changedFiles.includes(path.relative(process.cwd(), path.resolve(plan)).split(path.sep).join('/'))
+}
+
 export function discoverPlanDocs(changedFiles, passedPlans) {
-  return [...new Set([...passedPlans, ...changedFiles.filter(isPlanDoc)])]
+  const editedPassedPlans = passedPlans.filter(plan => isChangedByPr(plan, changedFiles))
+  return {
+    passed: [...new Set(passedPlans.filter(plan => !editedPassedPlans.includes(plan)))],
+    fromPr: [...new Set([...changedFiles.filter(isPlanDoc), ...editedPassedPlans.map(plan => path.relative(process.cwd(), path.resolve(plan)))])],
+  }
 }
 
 function parseArgs(argv) {

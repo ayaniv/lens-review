@@ -5,6 +5,7 @@
 //
 //   node merge-findings.mjs --diff <diff.patch> <findings.json>...   → merged JSON array on stdout
 import { fail, isRunDirectly, readJsonArrayFile, readTextFile, reportDropped } from './lib/cli.mjs'
+import { walkDiff } from './lib/diff.mjs'
 
 // Two findings in the same file and category are one issue when their lines are this close.
 export const DEDUP_LINE_WINDOW = 3
@@ -20,20 +21,12 @@ export function normalizeCategory(category) {
 export function parseDiffLines(patchText) {
   const diffLines = new Map()
   let ranges = null
-  for (const line of patchText.split('\n')) {
-    const fileMatch = line.match(/^\+\+\+ b\/(.*)$/)
-    if (fileMatch) {
-      ranges = []
-      diffLines.set(fileMatch[1], ranges)
-    } else if (line.startsWith('+++ ') || line.startsWith('diff --git ')) {
-      ranges = null
-    } else if (ranges) {
-      const hunkMatch = line.match(/^@@ -\S+ \+(\d+)(?:,(\d+))? @@/)
-      if (hunkMatch) {
-        const start = Number(hunkMatch[1])
-        const count = hunkMatch[2] === undefined ? 1 : Number(hunkMatch[2])
-        if (count > 0) ranges.push([start, start + count - 1])
-      }
+  for (const event of walkDiff(patchText)) {
+    if (event.kind === 'file') {
+      ranges = event.newPath ? [] : null
+      if (ranges) diffLines.set(event.newPath, ranges)
+    } else if (ranges && event.kind === 'hunk' && event.newCount > 0) {
+      ranges.push([event.newStart, event.newStart + event.newCount - 1])
     }
   }
   return diffLines
@@ -72,12 +65,26 @@ function malformedReason(finding) {
   return null
 }
 
+// Two reviewers can file one issue under different categories (a lookup bug as correctness
+// and as reliability); naming the same code at the same spot ties them together instead.
+const MIN_SHARED_CODE_NAMES = 2
+
+function codeNames(finding) {
+  return new Set(finding.description.match(HELPER_NAME_RE) ?? [])
+}
+
+function sharedCodeNameCount(first, second) {
+  const secondNames = codeNames(second)
+  return [...codeNames(first)].filter(name => secondNames.has(name)).length
+}
+
 // A reviewer never reports one issue twice, so a merged finding takes at most one finding
 // per reviewer: two findings from the same reviewer on the same line are two issues.
 function isSameIssue(merged, finding) {
   return (
     merged.file === finding.file &&
-    normalizeCategory(merged.category) === normalizeCategory(finding.category) &&
+    (normalizeCategory(merged.category) === normalizeCategory(finding.category) ||
+      sharedCodeNameCount(merged, finding) >= MIN_SHARED_CODE_NAMES) &&
     Math.abs(merged.line - finding.line) <= DEDUP_LINE_WINDOW &&
     !merged.reviewers.includes(finding.reviewer)
   )
@@ -156,6 +163,39 @@ function mergeDuplication(findings) {
     .map((finding, index) => ({ ...finding, id: `F${index + 1}` }))
 }
 
+// Shorter than this, the start of an error message is too generic to tie two findings together.
+const MIN_MESSAGE_KEY_LENGTH = 12
+
+// The fixed start of an error message, before its first format placeholder (%, {, $).
+function messageKey(message) {
+  const key = message.split(/[%{$]/)[0].trim().toLowerCase()
+  return key.length >= MIN_MESSAGE_KEY_LENGTH ? key : null
+}
+
+// The untested-failure-path precheck cites the line that raises an error; a reviewer cites the
+// test file that lacks the test. Same fix, so a missing-test finding that quotes the error folds
+// into the precheck's, and both places stay listed in its locations.
+function foldIntoUntestedErrors(findings) {
+  const untestedErrors = findings.filter(finding => finding.check === 'untested-failure-path' && finding.message && messageKey(finding.message))
+  const folded = new Set()
+  for (const untested of untestedErrors) {
+    const key = messageKey(untested.message)
+    for (const finding of findings) {
+      const isMissingTestForIt =
+        finding !== untested &&
+        !folded.has(finding) &&
+        normalizeCategory(finding.category) === normalizeCategory(untested.category) &&
+        finding.description.toLowerCase().includes(key)
+      if (!isMissingTestForIt) continue
+      untested.severity = higherSeverity(untested.severity, finding.severity)
+      untested.reviewers = [...new Set([...untested.reviewers, ...finding.reviewers])]
+      untested.locations = [...(untested.locations ?? [toLocation(untested)]), toLocation(finding)]
+      folded.add(finding)
+    }
+  }
+  return findings.filter(finding => !folded.has(finding))
+}
+
 export function mergeFindings(findingsPerReviewer, diffLines) {
   const findings = []
   const dropped = []
@@ -177,7 +217,7 @@ export function mergeFindings(findingsPerReviewer, diffLines) {
       findings.push({ id: `F${findings.length + 1}`, ...issue, reviewers: [reviewer] })
     }
   }
-  return { findings: mergeDuplication(findings), dropped }
+  return { findings: mergeDuplication(foldIntoUntestedErrors(findings)), dropped }
 }
 
 export function readDiffLines(diffPath) {

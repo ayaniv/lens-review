@@ -1,0 +1,10 @@
+[
+  { "id": "S1", "file": "e2e/standing-drives.spec.ts", "line": 4, "severity": "must", "category": "data" },
+  { "id": "S2", "file": "e2e/standing-drives.spec.ts", "line": 12, "severity": "must", "category": "data" },
+  { "id": "S3", "file": "README.md", "line": 189, "severity": "must", "category": "data" },
+  { "id": "S4", "file": "supabase/migrations/20261024000001_standing_drives.sql", "line": 1, "severity": "should", "category": "data" },
+  { "id": "S5", "file": "supabase/families-seed.template.sql", "line": 51, "severity": "should", "category": "correctness" },
+  { "id": "S6", "file": "supabase/families-seed.template.sql", "line": 57, "severity": "should", "category": "tests" },
+  { "id": "S7", "file": "supabase/families-seed.template.sql", "line": 61, "severity": "suggestion", "category": "correctness" },
+  { "id": "S8", "file": "src/data/familiesSeed.test.ts", "line": 56, "severity": "suggestion", "category": "tests" }
+]

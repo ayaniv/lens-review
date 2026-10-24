@@ -141,6 +141,18 @@ describe('gather-diff.sh', () => {
     assert.deepEqual(changedFiles.sort(), ['src/a.ts', 'src/b.ts'])
   })
 
+  test('writes base-tip.txt, the base branch as it is now, beside base.txt, the commit the branch was cut from', () => {
+    git(repoDir, 'checkout', '-q', 'main')
+    writeFiles(repoDir, { 'src/later.ts': 'export const later = 1\n' })
+    git(repoDir, 'add', '-A')
+    git(repoDir, 'commit', '-q', '-m', 'merged after the branch was cut')
+    git(repoDir, 'checkout', '-q', 'feature')
+    const runDir = lastLine(runScript('bash', [GATHER_DIFF, '--base', 'main'], { cwd: repoDir }).stdout)
+    const readRunFile = name => fs.readFileSync(path.join(runDir, name), 'utf8').trim()
+    assert.equal(readRunFile('base-tip.txt'), git(repoDir, 'rev-parse', 'main'))
+    assert.notEqual(readRunFile('base.txt'), readRunFile('base-tip.txt'))
+  })
+
   test('two runs never share a run dir (no clobbering between concurrent reviews)', () => {
     const first = lastLine(runScript('bash', [GATHER_DIFF, '--base', 'main'], { cwd: repoDir }).stdout)
     const second = lastLine(runScript('bash', [GATHER_DIFF, '--base', 'main'], { cwd: repoDir }).stdout)
@@ -443,6 +455,64 @@ describe('merge-findings.mjs', () => {
   })
 })
 
+describe('merge-findings.mjs: one issue under two categories or two files', () => {
+  // Modelled on the carpool A/B runs: two reviewers filed one lookup bug on one line as
+  // correctness and as reliability, and a precheck's untested error and a reviewer's
+  // missing-test finding on the test file named the same error message.
+  const DIFF = [
+    diffSection('supabase/seed.sql', Array(80).fill('+x')),
+    diffSection('src/seed.test.ts', Array(120).fill('+x')),
+  ].join('')
+  let mergeFindings
+  let diffLines
+
+  beforeEach(async () => {
+    let parseDiffLines
+    ;({ mergeFindings, parseDiffLines } = await import(MERGE_FINDINGS))
+    diffLines = parseDiffLines(DIFF)
+  })
+
+  const lookup = overrides => finding({ file: 'supabase/seed.sql', line: 51, ...overrides })
+
+  test('folds two reviewers\' findings on one line that name the same code under different categories', () => {
+    const { findings } = mergeFindings([
+      [lookup({ category: 'correctness', description: 'select parent_id into v_parent_id matches display_name alone, so a shared name picks a random child.', reviewer: 'Anthropic' })],
+      [lookup({ category: 'reliability', line: 52, description: 'The non-strict select into v_parent_id on display_name silently takes the first row.', reviewer: 'Reliability' })],
+    ], diffLines)
+    assert.equal(findings.length, 1)
+    assert.deepEqual(findings[0].reviewers, ['Anthropic', 'Reliability'])
+  })
+
+  test('keeps findings on one line apart when they share no code name, whatever the category', () => {
+    const { findings } = mergeFindings([
+      [lookup({ category: 'correctness', description: 'select parent_id into v_parent_id matches display_name alone.', reviewer: 'Anthropic' })],
+      [lookup({ category: 'performance', description: 'This loop runs one query per drive; batch it.', reviewer: 'Reliability' })],
+    ], diffLines)
+    assert.equal(findings.length, 2)
+  })
+
+  const untestedRaise = finding({
+    file: 'supabase/seed.sql', line: 57, category: 'tests', reviewer: 'Precheck', check: 'untested-failure-path',
+    message: 'no practice on weekday % (add it to schedule_slots first)',
+    description: 'No test mentions the error "no practice on weekday % (add it to schedule_slots first)" that this line adds, so its failure path is untested.',
+  })
+
+  test('folds a reviewer\'s missing-test finding that quotes a precheck\'s untested error into it, keeping both locations', () => {
+    const missingTest = finding({ file: 'src/seed.test.ts', line: 99, category: 'tests', reviewer: 'Deep Pass', description: "The 'no practice on weekday %' branch of the seed has no test." })
+    const { findings } = mergeFindings([[missingTest], [untestedRaise]], diffLines)
+    assert.equal(findings.length, 1)
+    assert.equal(findings[0].file, 'supabase/seed.sql')
+    assert.deepEqual(findings[0].reviewers, ['Precheck', 'Deep Pass'])
+    assert.deepEqual(findings[0].locations.map(({ file, line }) => `${file}:${line}`), ['supabase/seed.sql:57', 'src/seed.test.ts:99'])
+  })
+
+  test('keeps a missing-test finding about a different error apart from the precheck', () => {
+    const otherTest = finding({ file: 'src/seed.test.ts', line: 99, category: 'tests', reviewer: 'Deep Pass', description: 'The unknown area branch has no test.' })
+    const { findings } = mergeFindings([[otherTest], [untestedRaise]], diffLines)
+    assert.equal(findings.length, 2)
+  })
+})
+
 describe('merge-findings.mjs: duplication across copies', () => {
   // Modelled on a real run: three e2e specs each re-declare helpers that an existing spec
   // already has, and a migration copies an older function body. Two reviewers flagged every
@@ -598,6 +668,68 @@ describe('discover-rule-sources.mjs', () => {
     const result = runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, '--files', filesList])
     assert.equal(result.status, 0, result.stderr)
     assert.ok(JSON.parse(result.stdout).some(source => source.path === 'packages/ui/AGENTS.md'))
+  })
+
+  describe('the developer\'s taste file', () => {
+    let tasteFile
+    // A HOME whose ~/.claude holds a CLAUDE.md: the script must never read it on its own.
+    let homeWithClaudeDir
+    const discover = (args, env = {}) =>
+      runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts', '--casting', ...args], {
+        env: { ...process.env, HOME: homeWithClaudeDir, LENS_REVIEW_TASTE: '', ...env },
+      })
+
+    beforeEach(() => {
+      homeWithClaudeDir = makeTempDir('taste-home')
+      writeFiles(homeWithClaudeDir, { '.claude/CLAUDE.md': '# personal rules\n', '.claude/settings.json': '{}\n' })
+      tasteFile = path.join(makeTempDir('taste'), 'taste.md')
+      fs.writeFileSync(tasteFile, '# Personal engineering taste\n- No duplication.\n')
+    })
+
+    test('--taste lists the file last, with kind "taste", after every repo rule file', () => {
+      const result = discover(['--taste', tasteFile])
+      assert.equal(result.status, 0, result.stderr)
+      const sources = JSON.parse(result.stdout)
+      assert.deepEqual(sources.at(-1), { path: tasteFile, kind: 'taste' })
+      assert.equal(sources.filter(source => source.kind === 'taste').length, 1)
+    })
+
+    test('LENS_REVIEW_TASTE is the default when no --taste is passed, and --taste beats it', () => {
+      const fromEnv = JSON.parse(discover([], { LENS_REVIEW_TASTE: tasteFile }).stdout)
+      assert.deepEqual(fromEnv.at(-1), { path: tasteFile, kind: 'taste' })
+      const otherTaste = path.join(path.dirname(tasteFile), 'other.md')
+      fs.writeFileSync(otherTaste, '# other\n')
+      const fromFlag = JSON.parse(discover(['--taste', otherTaste], { LENS_REVIEW_TASTE: tasteFile }).stdout)
+      assert.deepEqual(fromFlag.filter(source => source.kind === 'taste'), [{ path: otherTaste, kind: 'taste' }])
+    })
+
+    test('without --taste or LENS_REVIEW_TASTE, nothing under ~/.claude is listed', () => {
+      const result = discover([])
+      assert.equal(result.status, 0, result.stderr)
+      const sources = JSON.parse(result.stdout)
+      assert.ok(!sources.some(source => source.kind === 'taste'))
+      assert.ok(!sources.some(source => source.path.includes(homeWithClaudeDir)))
+    })
+
+    test('without --casting (the review-time call), LENS_REVIEW_TASTE is ignored: the taste reaches reviewers only through the cast team', () => {
+      const result = runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts'], {
+        env: { ...process.env, HOME: homeWithClaudeDir, LENS_REVIEW_TASTE: tasteFile },
+      })
+      assert.equal(result.status, 0, result.stderr)
+      assert.ok(!JSON.parse(result.stdout).some(source => source.kind === 'taste'))
+    })
+
+    test('--taste without --casting fails, rather than putting the taste among the repo rules', () => {
+      const result = runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts', '--taste', tasteFile])
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /lens-review: --taste only applies with --casting/)
+    })
+
+    test('fails naming a taste file that does not exist, rather than casting without it', () => {
+      const result = discover(['--taste', path.join(homeWithClaudeDir, 'missing.md')])
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /lens-review: taste file not found: .*missing\.md/)
+    })
   })
 
   test('CLI exits non-zero when --repo does not exist', () => {
@@ -1300,7 +1432,7 @@ describe('collect-findings.mjs', () => {
     fs.writeFileSync(path.join(runDir, 'reply-maintainer.txt'), '```json\n' + JSON.stringify([withoutReviewer]) + '\n```')
     const result = collect('anthropic=Anthropic', 'maintainer=The Maintainer')
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), { failedReviewers: [], droppedFindings: 0, findings: 2 })
+    assert.deepEqual(JSON.parse(result.stdout), { failedReviewers: [], droppedFindings: 0, prechecks: 0, findings: 2 })
     const merged = JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8'))
     assert.deepEqual(merged.map(written => written.reviewers), [['Anthropic'], ['The Maintainer']])
     assert.ok(fs.existsSync(path.join(runDir, 'findings-maintainer.json')))
@@ -1313,6 +1445,27 @@ describe('collect-findings.mjs', () => {
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(JSON.parse(result.stdout).failedReviewers, ['The Architect', 'The Reuse Scout'])
     assert.match(result.stderr, /failed reviewer: .*reply-reuse-scout\.txt/)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8')).length, 1)
+  })
+
+  test('merges the precheck findings in precheck.json like any reviewer\'s, credited to Precheck', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
+    const precheckFinding = { ...finding({ line: 40, category: 'tests', reviewer: 'Precheck' }), check: 'untested-failure-path' }
+    fs.writeFileSync(path.join(runDir, 'precheck.json'), JSON.stringify([precheckFinding]))
+    const result = collect('anthropic=Anthropic')
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).prechecks, 1)
+    const merged = JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8'))
+    const fromPrecheck = merged.find(written => written.reviewers.includes('Precheck'))
+    assert.equal(fromPrecheck.check, 'untested-failure-path')
+  })
+
+  test('lists Precheck as a failed reviewer when precheck.json is not a findings array, and merges the rest', () => {
+    fs.writeFileSync(path.join(runDir, 'reply-anthropic.txt'), JSON.stringify([finding({ reviewer: 'Anthropic' })]))
+    fs.writeFileSync(path.join(runDir, 'precheck.json'), '{"not": "an array"}')
+    const result = collect('anthropic=Anthropic')
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).failedReviewers, ['Precheck'])
     assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'merged.json'), 'utf8')).length, 1)
   })
 
@@ -1435,24 +1588,33 @@ describe('discover-plan-docs.mjs', () => {
     )
   })
 
-  test('finds the plan and intent docs the PR changes, and nothing else', () => {
+  test('finds the plan and intent docs the PR changes, and nothing else, as the PR\'s own', () => {
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [], fromPr: ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'] })
   })
 
-  test('puts a plan the caller passes first, and lists each path once', () => {
+  test('lists a plan the caller passes apart from the PR\'s own, once each', () => {
     const passedPlan = path.join(inputDir, 'tech-design.md')
     fs.writeFileSync(passedPlan, '# Plan\n')
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', passedPlan, '--plan', passedPlan])
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), [passedPlan, 'docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [passedPlan], fromPr: ['docs/tech-design-names-parents-seats.md', 'tasks/x/INTENT.md'] })
   })
 
-  test('returns [] for a PR that changes no plan doc', () => {
+  test('a passed plan the PR itself changes stays the PR\'s own: passing it does not vouch for the PR\'s edits', () => {
+    const repoDir = makeTempDir('plan-repo')
+    writeFiles(repoDir, { 'docs/tech-design-names-parents-seats.md': '# Plan\n' })
+    const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath, '--plan', 'docs/tech-design-names-parents-seats.md'], { cwd: repoDir })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout).passed, [])
+    assert.ok(JSON.parse(result.stdout).fromPr.includes('docs/tech-design-names-parents-seats.md'))
+  })
+
+  test('returns no plan docs for a PR that changes none', () => {
     fs.writeFileSync(filesPath, 'src/a.ts\n')
     const result = runScript('node', [DISCOVER_PLAN_DOCS, '--files', filesPath])
-    assert.deepEqual(JSON.parse(result.stdout), [])
+    assert.deepEqual(JSON.parse(result.stdout), { passed: [], fromPr: [] })
   })
 
   test('fails naming a passed plan that does not exist, rather than reviewing without it', () => {

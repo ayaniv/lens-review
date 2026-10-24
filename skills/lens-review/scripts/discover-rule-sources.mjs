@@ -2,8 +2,13 @@
 // each file's directory and its ancestors (nearest first), plus the repo-wide cursor and
 // copilot rule files. Casting passes every tracked file; a review passes the changed ones.
 //
-//   node discover-rule-sources.mjs --repo <dir> [--files <files.txt>] [file...]
-//     → JSON array of {path, kind} on stdout, paths relative to the repo
+// The developer's own taste file (e.g. ~/.claude/CLAUDE.md) joins only by opt-in, through
+// --taste or LENS_REVIEW_TASTE, comes last so the repo's own rules win a conflict, and only
+// in the --casting call: at review time it reaches the reviewers through the cast team, never
+// listed among the repo rules. Nothing else outside the repo is ever read.
+//
+//   node discover-rule-sources.mjs --repo <dir> [--files <files.txt>] [--casting [--taste <path>]] [file...]
+//     → JSON array of {path, kind} on stdout, paths relative to the repo (the taste file's absolute)
 import fs from 'node:fs'
 import path from 'node:path'
 import { fail, isRunDirectly, readTextFile } from './lib/cli.mjs'
@@ -55,20 +60,34 @@ export function discoverRuleSources(repoDir, files) {
   return [...sources, ...repoWideRuleSources(repoDir)]
 }
 
+// --taste wins over the LENS_REVIEW_TASTE default; with neither, there is no taste file.
+export function resolveTastePath(tasteFlag, env) {
+  const tastePath = tasteFlag || env.LENS_REVIEW_TASTE
+  return tastePath ? path.resolve(tastePath) : null
+}
+
 function parseArgs(argv) {
   const files = []
   let repoDir = null
+  let tasteFlag = null
+  let isCasting = false
   for (let index = 0; index < argv.length; index++) {
     if (argv[index] === '--repo') repoDir = argv[++index]
+    else if (argv[index] === '--casting') isCasting = true
+    else if (argv[index] === '--taste') tasteFlag = argv[++index]
     else if (argv[index] === '--files') files.push(...readTextFile(argv[++index]).split('\n').filter(Boolean))
     else files.push(argv[index])
   }
-  return { repoDir, files }
+  return { repoDir, files, tasteFlag, isCasting }
 }
 
 if (isRunDirectly(import.meta.url)) {
-  const { repoDir, files } = parseArgs(process.argv.slice(2))
-  if (!repoDir) fail('usage: discover-rule-sources.mjs --repo <dir> [--files <files.txt>] [file...]')
+  const { repoDir, files, tasteFlag, isCasting } = parseArgs(process.argv.slice(2))
+  if (!repoDir) fail('usage: discover-rule-sources.mjs --repo <dir> [--files <files.txt>] [--casting [--taste <path>]] [file...]')
   if (!fs.existsSync(repoDir)) fail(`repo not found: ${repoDir}`)
-  console.log(JSON.stringify(discoverRuleSources(repoDir, files), null, 2))
+  if (tasteFlag && !isCasting) fail('--taste only applies with --casting: the taste is cast into the team, never listed with the repo rules')
+  const tastePath = isCasting ? resolveTastePath(tasteFlag, process.env) : null
+  if (tastePath && !fs.existsSync(tastePath)) fail(`taste file not found: ${tastePath}`)
+  const tasteSource = tastePath ? [{ path: tastePath, kind: 'taste' }] : []
+  console.log(JSON.stringify([...discoverRuleSources(repoDir, files), ...tasteSource], null, 2))
 }

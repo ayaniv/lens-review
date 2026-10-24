@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Writes the diff under review into a fresh per-run dir (diff.patch + files.txt + base.txt)
+# Writes the diff under review into a fresh per-run dir (diff.patch, files.txt, base.txt and
+# base-tip.txt)
 # and prints that dir as the last stdout line. A per-run dir, not a fixed /tmp path, so two
 # concurrent reviews can never overwrite each other's diff. base.txt is the commit the PR
 # branched from: casting reads the repo there, so the PR's own code never shapes the team.
+# base-tip.txt is the base branch as it is now, which can be ahead of base.txt: the
+# migration-order precheck reads what has merged since the branch was cut.
 #
 #   gather-diff.sh [--base <ref>]     diff <ref>...HEAD of the repo in the cwd (default: the
 #                                     remote's default branch, else a local main, else master)
@@ -45,6 +48,7 @@ git rev-parse --verify --quiet "$base_ref" > /dev/null || fail "base ref not fou
 
 run_dir="$(mktemp -d "${TMPDIR:-/tmp}/lens-review.XXXXXX")"
 git merge-base "$base_ref" HEAD > "$run_dir/base.txt" || fail "no common ancestor between $base_ref and HEAD"
+git rev-parse "$base_ref^{commit}" > "$run_dir/base-tip.txt"
 
 if [[ -n "$patch_path" ]]; then
   [[ -r "$patch_path" ]] || fail "patch file not found or unreadable: $patch_path"

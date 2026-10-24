@@ -41,6 +41,9 @@
 - [should] No large or unnecessary imports added — check for accidental full-library imports vs named imports
 - [suggestion] No unnecessary re-renders from new object/array literals or inline functions passed as stable props
 
+## Data and Privacy
+- [must] No real people's personal details committed in code, tests, fixtures, seeds, docs or comments: names tied to a relationship, a schedule or availability, contact details. Use placeholders.
+
 ## Tests
 - [should] New behavior has test coverage
 - [must] No existing tests deleted or skipped without justification
