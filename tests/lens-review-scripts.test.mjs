@@ -605,7 +605,7 @@ describe('discover-rule-sources.mjs', () => {
     // A HOME whose ~/.claude holds a CLAUDE.md: the script must never read it on its own.
     let homeWithClaudeDir
     const discover = (args, env = {}) =>
-      runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts', ...args], {
+      runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts', '--casting', ...args], {
         env: { ...process.env, HOME: homeWithClaudeDir, LENS_REVIEW_TASTE: '', ...env },
       })
 
@@ -639,6 +639,20 @@ describe('discover-rule-sources.mjs', () => {
       const sources = JSON.parse(result.stdout)
       assert.ok(!sources.some(source => source.kind === 'taste'))
       assert.ok(!sources.some(source => source.path.includes(homeWithClaudeDir)))
+    })
+
+    test('without --casting (the review-time call), LENS_REVIEW_TASTE is ignored: the taste reaches reviewers only through the cast team', () => {
+      const result = runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts'], {
+        env: { ...process.env, HOME: homeWithClaudeDir, LENS_REVIEW_TASTE: tasteFile },
+      })
+      assert.equal(result.status, 0, result.stderr)
+      assert.ok(!JSON.parse(result.stdout).some(source => source.kind === 'taste'))
+    })
+
+    test('--taste without --casting fails, rather than putting the taste among the repo rules', () => {
+      const result = runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts', '--taste', tasteFile])
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /lens-review: --taste only applies with --casting/)
     })
 
     test('fails naming a taste file that does not exist, rather than casting without it', () => {

@@ -3,10 +3,11 @@
 // copilot rule files. Casting passes every tracked file; a review passes the changed ones.
 //
 // The developer's own taste file (e.g. ~/.claude/CLAUDE.md) joins only by opt-in, through
-// --taste or LENS_REVIEW_TASTE, and comes last so the repo's own rules win a conflict.
-// Nothing else outside the repo is ever read.
+// --taste or LENS_REVIEW_TASTE, comes last so the repo's own rules win a conflict, and only
+// in the --casting call: at review time it reaches the reviewers through the cast team, never
+// listed among the repo rules. Nothing else outside the repo is ever read.
 //
-//   node discover-rule-sources.mjs --repo <dir> [--files <files.txt>] [--taste <path>] [file...]
+//   node discover-rule-sources.mjs --repo <dir> [--files <files.txt>] [--casting [--taste <path>]] [file...]
 //     → JSON array of {path, kind} on stdout, paths relative to the repo (the taste file's absolute)
 import fs from 'node:fs'
 import path from 'node:path'
@@ -69,20 +70,23 @@ function parseArgs(argv) {
   const files = []
   let repoDir = null
   let tasteFlag = null
+  let isCasting = false
   for (let index = 0; index < argv.length; index++) {
     if (argv[index] === '--repo') repoDir = argv[++index]
+    else if (argv[index] === '--casting') isCasting = true
     else if (argv[index] === '--taste') tasteFlag = argv[++index]
     else if (argv[index] === '--files') files.push(...readTextFile(argv[++index]).split('\n').filter(Boolean))
     else files.push(argv[index])
   }
-  return { repoDir, files, tasteFlag }
+  return { repoDir, files, tasteFlag, isCasting }
 }
 
 if (isRunDirectly(import.meta.url)) {
-  const { repoDir, files, tasteFlag } = parseArgs(process.argv.slice(2))
-  if (!repoDir) fail('usage: discover-rule-sources.mjs --repo <dir> [--files <files.txt>] [--taste <path>] [file...]')
+  const { repoDir, files, tasteFlag, isCasting } = parseArgs(process.argv.slice(2))
+  if (!repoDir) fail('usage: discover-rule-sources.mjs --repo <dir> [--files <files.txt>] [--casting [--taste <path>]] [file...]')
   if (!fs.existsSync(repoDir)) fail(`repo not found: ${repoDir}`)
-  const tastePath = resolveTastePath(tasteFlag, process.env)
+  if (tasteFlag && !isCasting) fail('--taste only applies with --casting: the taste is cast into the team, never listed with the repo rules')
+  const tastePath = isCasting ? resolveTastePath(tasteFlag, process.env) : null
   if (tastePath && !fs.existsSync(tastePath)) fail(`taste file not found: ${tastePath}`)
   const tasteSource = tastePath ? [{ path: tastePath, kind: 'taste' }] : []
   console.log(JSON.stringify([...discoverRuleSources(repoDir, files), ...tasteSource], null, 2))
