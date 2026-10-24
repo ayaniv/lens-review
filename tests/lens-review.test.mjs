@@ -305,6 +305,17 @@ describe('team', () => {
     assert.match(skill, /^Prechecks: /m, 'the telemetry must say what the prechecks found')
   })
 
+  test('takes the developer\'s taste file only through --taste or LENS_REVIEW_TASTE, and casts it into the personas', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.match(parseFrontmatter(skill).description, /--taste <path>/)
+    const castStep = skill.slice(skill.indexOf('**Cast**'), skill.indexOf('**Pick the panel:**'))
+    assert.match(castStep, /discover-rule-sources\.mjs" --repo "<RUN_DIR>\/base" --files "<RUN_DIR>\/all-files\.txt" \[--taste "<path>"\]/)
+    const castingPrompt = readText(CASTING_PROMPT)
+    assert.match(castingPrompt, /\(source: taste\)/)
+    assert.match(castingPrompt, /repo's own rule sources win/)
+    assert.match(readText(path.join(REPO_ROOT, 'README.md')), /taste[^\n]*--recast|--recast[^\n]*taste/)
+  })
+
   test('gives the plan docs to the Domain Expert and the Data Steward, whose findings depend on the plan', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     assert.match(skill, /scripts\/discover-plan-docs\.mjs" --files "<RUN_DIR>\/files\.txt"/)

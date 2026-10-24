@@ -20,10 +20,13 @@ Run from inside the repo you want reviewed:
 /lens-review --base develop                    # current branch vs another base ref
 /lens-review https://github.com/org/repo/pull/123   # a GitHub PR
 /lens-review --plan ../tasks/x/tech-design.md  # also check the PR against a plan it doesn't carry
+/lens-review --taste ~/.claude/CLAUDE.md --recast  # cast your own engineering taste into the team
 /lens-review --recast                          # throw away the saved team and cast a fresh one
 ```
 
 The base defaults to the remote's default branch, then a local `main`, then `master`.
+
+**Your own taste (opt-in).** `--taste <path>` adds your personal rules file, e.g. the "engineering taste" section of `~/.claude/CLAUDE.md`, to the rule sources the team is cast from. Each of its rules lands in the persona that owns that lens, marked `(source: taste)`, and the repo's own rules win where the two conflict. To set it once, export `LENS_REVIEW_TASTE=<path>`; `--taste` overrides it. Nothing else under `~/.claude` is ever read. The taste is baked into the team when it's cast, so after changing which taste file you use (or editing it), run once with `--recast`.
 
 A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone, or does exactly what its plan asked, is judged against that plan.
 

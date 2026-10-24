@@ -600,6 +600,54 @@ describe('discover-rule-sources.mjs', () => {
     assert.ok(JSON.parse(result.stdout).some(source => source.path === 'packages/ui/AGENTS.md'))
   })
 
+  describe('the developer\'s taste file', () => {
+    let tasteFile
+    // A HOME whose ~/.claude holds a CLAUDE.md: the script must never read it on its own.
+    let homeWithClaudeDir
+    const discover = (args, env = {}) =>
+      runScript('node', [DISCOVER_RULE_SOURCES, '--repo', repoDir, 'packages/api/client.ts', ...args], {
+        env: { ...process.env, HOME: homeWithClaudeDir, LENS_REVIEW_TASTE: '', ...env },
+      })
+
+    beforeEach(() => {
+      homeWithClaudeDir = makeTempDir('taste-home')
+      writeFiles(homeWithClaudeDir, { '.claude/CLAUDE.md': '# personal rules\n', '.claude/settings.json': '{}\n' })
+      tasteFile = path.join(makeTempDir('taste'), 'taste.md')
+      fs.writeFileSync(tasteFile, '# Personal engineering taste\n- No duplication.\n')
+    })
+
+    test('--taste lists the file last, with kind "taste", after every repo rule file', () => {
+      const result = discover(['--taste', tasteFile])
+      assert.equal(result.status, 0, result.stderr)
+      const sources = JSON.parse(result.stdout)
+      assert.deepEqual(sources.at(-1), { path: tasteFile, kind: 'taste' })
+      assert.equal(sources.filter(source => source.kind === 'taste').length, 1)
+    })
+
+    test('LENS_REVIEW_TASTE is the default when no --taste is passed, and --taste beats it', () => {
+      const fromEnv = JSON.parse(discover([], { LENS_REVIEW_TASTE: tasteFile }).stdout)
+      assert.deepEqual(fromEnv.at(-1), { path: tasteFile, kind: 'taste' })
+      const otherTaste = path.join(path.dirname(tasteFile), 'other.md')
+      fs.writeFileSync(otherTaste, '# other\n')
+      const fromFlag = JSON.parse(discover(['--taste', otherTaste], { LENS_REVIEW_TASTE: tasteFile }).stdout)
+      assert.deepEqual(fromFlag.filter(source => source.kind === 'taste'), [{ path: otherTaste, kind: 'taste' }])
+    })
+
+    test('without --taste or LENS_REVIEW_TASTE, nothing under ~/.claude is listed', () => {
+      const result = discover([])
+      assert.equal(result.status, 0, result.stderr)
+      const sources = JSON.parse(result.stdout)
+      assert.ok(!sources.some(source => source.kind === 'taste'))
+      assert.ok(!sources.some(source => source.path.includes(homeWithClaudeDir)))
+    })
+
+    test('fails naming a taste file that does not exist, rather than casting without it', () => {
+      const result = discover(['--taste', path.join(homeWithClaudeDir, 'missing.md')])
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /lens-review: taste file not found: .*missing\.md/)
+    })
+  })
+
   test('CLI exits non-zero when --repo does not exist', () => {
     const result = runScript('node', [DISCOVER_RULE_SOURCES, '--repo', '/nonexistent/repo', 'a.ts'])
     assert.notEqual(result.status, 0)
