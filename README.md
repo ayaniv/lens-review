@@ -1,6 +1,6 @@
 # lens-review
 
-A [Claude Code](https://claude.com/claude-code) skill that reviews a branch or PR with a synthetic team of reviewer personas, so it needs no PR-comment history. The first time you run it in a repo, it casts a team from the repo's layout and its own AGENTS.md / CLAUDE.md / Cursor / Copilot rules, and saves that team for later runs. On each review it picks the panel from what the PR changes. Five core personas (Architect, Maintainer, Reliability Engineer, Domain Expert, Reuse Scout) review every PR. The backend, design-system, data and infra personas join only when the PR touches their concern: a changed file is in their area, or a changed line anywhere looks like their concern (for example, an app overriding a design-system component's style). The personas then challenge each other's findings, and an Opus skeptic decides which findings make the final report.
+A [Claude Code](https://claude.com/claude-code) skill that reviews a branch or PR with a synthetic team of reviewer personas, so it needs no PR-comment history. The first time you run it in a repo, it casts a team from the repo's layout and its own AGENTS.md / CLAUDE.md / Cursor / Copilot rules, and saves that team for later runs. On each review it picks the panel from what the PR changes. Five core personas (Architect, Maintainer, Reliability Engineer, Domain Expert, Reuse Scout) review every PR. The backend, design-system, data and infra personas join only when the PR touches their concern: a changed file is in their area, or a changed line anywhere looks like their concern (for example, an app overriding a design-system component's style). Deterministic pre-checks add the findings a script can be sure of, a Sonnet deep-pass reviewer reads the whole diff, and an Opus skeptic decides which findings make the final report.
 
 ## Install
 
@@ -75,17 +75,17 @@ The base personas the casting step starts from are in [`skills/lens-review/team/
 
 ## Cost and models
 
-Every reviewer, persona and challenge turn runs on **Haiku 5.5**. Only two steps run on **Opus 5.5**: casting (once per repo) and the skeptic. No other model is used.
+Every reviewer runs on **Haiku 5.5**, except one deep-pass reviewer on **Sonnet 5.5**. Casting (once per repo) and the skeptic run on **Opus 5.5**.
 
 | Agent | Count | Model |
 |---|---|---|
 | Casting | 1, first run per repo only (~$0.50–0.80) | Opus 5.5 |
 | Anthropic-general | 1 | Haiku 5.5 |
+| Deep pass | 1 (~$0.20–0.40) | Sonnet 5.5 |
 | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
-| Team challenge | +1 turn per persona agent | Haiku 5.5 |
 | Skeptic | 1 (~$0.30–0.50) | Opus 5.5 |
 
-A run uses at most 13 agents, or 14 on a repo's first run. Expect **~$0.50–1 per run** for the spawned agents, plus ~$0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Each run prints its cost telemetry after the report. If a run goes over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
+A run uses at most 14 agents, or 15 on a repo's first run. Measured on two real PRs, a run costs **~$1.70–2.20**: ~$0.65–0.95 for the spawned agents and ~$1.30–1.75 for the orchestrating session, plus casting on a repo's first run. It takes 3–4.5 minutes. Each run prints its cost and timing telemetry after the report. If the spawned agents go over **$2 or 1M tokens**, something grew too large, usually a huge diff or a team with too many scoped personas. Narrow the scopes or split the PR. The `## Cost` section of [`SKILL.md`](skills/lens-review/SKILL.md) has the details.
 
 ## Tests
 

@@ -1,6 +1,6 @@
 ---
 name: lens-review
-description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), lets the personas challenge each other's findings, and has an Opus skeptic rule on what survives. When the review is of an open GitHub PR, offers to post it there as inline comments. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--plan <path>] [--taste <path>] [--recast].
+description: Pre-PR review by a synthetic team of reviewer personas — no PR-comment history needed. Casts a team per repo from its layout and its own AGENTS.md/CLAUDE.md/cursor/copilot rules, picks the panel from what the PR changes (core personas always; backend, design-system, data and infra personas only when their files change), adds deterministic pre-checks and a Sonnet deep pass, and has an Opus skeptic rule on what survives. When the review is of an open GitHub PR, offers to post it there as inline comments. Usage — /lens-review [--base <ref>] [<GitHub PR URL>] [--plan <path>] [--taste <path>] [--recast].
 allowed-tools: ["Agent", "SendMessage", "ToolSearch", "Bash", "Glob", "Grep", "Read", "Write"]
 ---
 
@@ -246,16 +246,16 @@ Run this after the report whenever the review is of a GitHub PR. Posting writes 
 
 ## Cost
 
-Every reviewer, persona and challenge turn runs on **Haiku 5.5** (USD 0.10 in / USD 0.50 out per million tokens, for prompts up to 100K tokens; USD 0.50 / USD 2.50 beyond). Only casting (first run per repo) and the skeptic run on **Opus 5.5** (USD 4 / USD 20). No other model is used. The A/B variants in `scripts/lib/variant.mjs` are the one exception: `b` puts the Anthropic-general reviewer on Sonnet, and `c` adds one Sonnet deep-pass reviewer.
+Every reviewer runs on **Haiku 5.5** (USD 0.10 in / USD 0.50 out per million tokens, for prompts up to 100K tokens; USD 0.50 / USD 2.50 beyond), except one deep-pass reviewer on **Sonnet 5.5**. Casting (first run per repo) and the skeptic run on **Opus 5.5** (USD 4 / USD 20). This is the default, variant `d` in `scripts/lib/variant.mjs`, which won a live A/B on two real PRs; the other variants exist only to re-run that A/B (`a` and `b` add the challenge round; `b` puts the Anthropic-general reviewer on Sonnet).
 
 | Agent | Count | Model |
 |---|---|---|
 | Casting | 1, first run per repo only (~USD 0.50–0.80) | Opus 5.5 |
 | Anthropic-general | 1 | Haiku 5.5 |
+| Deep pass | 1 (~USD 0.20–0.40) | Sonnet 5.5 |
 | Persona reviewers | 5 core + 0–4 area + 0–2 project (at most 11) | Haiku 5.5 |
-| Team challenge | +1 turn per persona agent (fresh agents if `SendMessage` is unavailable, ~USD 0.05) | Haiku 5.5 |
 | Skeptic | 1 (~USD 0.30–0.50) | Opus 5.5 |
 
-At most 13 agents per run (14 on a repo's first run). Expect **~USD 0.50–1 per run for the spawned agents**, plus ~USD 0.20–0.50 for the orchestrating session, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
+At most 14 agents per run (15 on a repo's first run). Measured on the two A/B PRs: **~USD 0.65–0.95 and ~0.7–0.8M tokens for the spawned agents**, plus **~USD 1.30–1.75 for the orchestrating session** (Opus), so ~USD 1.70–2.20 a run, plus casting on a repo's first run. Keep each persona agent under 100K prompt tokens to stay in Haiku's lower price tier: scoped personas read only their own hunks, and the core personas, which read the whole diff, are the ones to watch on a huge PR.
 
 **Alarm:** if a run goes over **USD 2 or 1M tokens**, something ballooned (a huge diff, or a team with too many scoped personas). Narrow the Scopes in `TEAM_DIR`, or split the PR, before running again.

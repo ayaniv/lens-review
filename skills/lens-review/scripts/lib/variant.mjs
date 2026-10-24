@@ -5,7 +5,8 @@
 //   b: as a, with the Anthropic-general reviewer on Sonnet
 //   c: no challenge round; one Sonnet deep-pass reviewer on the whole diff
 //   d: c, the winner of the live A/B on both gold cases, plus prechecks (the default)
-// TODO: once the A/B picks a winner, fold it into the default and drop the losing variants.
+// TODO: the live A/B picked d (RESULT.md, item 4). Drop a, b and c, and with them the challenge
+// round (Step 3, collect-votes.mjs, tally-challenges.mjs, challenge-prompt.md), as its own change.
 const VARIANTS = {
   a: { generalModel: 'haiku', challengeRound: true, deepPass: false, prechecks: false },
   b: { generalModel: 'sonnet', challengeRound: true, deepPass: false, prechecks: false },
