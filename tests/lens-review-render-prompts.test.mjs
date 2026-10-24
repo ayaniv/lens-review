@@ -58,15 +58,15 @@ describe('render-prompts.mjs', () => {
     const { agents, collectArgs } = JSON.parse(result.stdout)
     assert.deepEqual(
       agents.map(({ stem, reviewer }) => [stem, reviewer]),
-      [['anthropic', 'Anthropic'], ['maintainer', 'The Maintainer'], ['domain-expert', 'The Domain Expert'], ['data-steward', 'The Data Steward']],
+      [['anthropic', 'Anthropic'], ['deep-pass', 'Deep Pass'], ['maintainer', 'The Maintainer'], ['domain-expert', 'The Domain Expert'], ['data-steward', 'The Data Steward']],
     )
     for (const agent of agents) {
       assert.equal(agent.promptPath, path.join(runDir, `prompt-${agent.stem}.txt`))
-      assert.equal(agent.model, 'haiku')
+      assert.equal(agent.model, agent.stem === 'deep-pass' ? 'sonnet' : 'haiku')
       assert.doesNotMatch(prompt(agent.stem), UNFILLED_RE, `${agent.stem} has an unfilled placeholder`)
       assert.ok(prompt(agent.stem).includes(path.join(runDir, `reply-${agent.stem}.txt`)))
     }
-    assert.deepEqual(collectArgs, ['anthropic=Anthropic', 'maintainer=The Maintainer', 'domain-expert=The Domain Expert', 'data-steward=The Data Steward'])
+    assert.deepEqual(collectArgs, ['anthropic=Anthropic', 'deep-pass=Deep Pass', 'maintainer=The Maintainer', 'domain-expert=The Domain Expert', 'data-steward=The Data Steward'])
   })
 
   test('review: fills the persona file, the PR context, the rule paths and the categories', () => {
@@ -201,6 +201,14 @@ describe('the A/B variants (LENS_REVIEW_VARIANT)', () => {
     assert.equal(deepPass.model, 'sonnet')
     assert.ok(collectArgs.includes('deep-pass=Deep Pass'))
     assert.doesNotMatch(readText(deepPass.promptPath), UNFILLED_RE)
+  })
+
+  test('d, the default: c (the A/B winner) plus prechecks', () => {
+    for (const variant of ['d', '']) {
+      const { agents, challengeRound } = JSON.parse(renderAs(variant).stdout)
+      assert.equal(challengeRound, false)
+      assert.equal(agents.find(agent => agent.stem === 'deep-pass').model, 'sonnet')
+    }
   })
 
   test('an unknown variant fails naming it, rather than silently running the default', () => {

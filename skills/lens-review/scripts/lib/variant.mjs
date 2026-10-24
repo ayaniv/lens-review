@@ -4,14 +4,13 @@
 //   a: every reviewer on Haiku, challenge round, no prechecks (the control)
 //   b: as a, with the Anthropic-general reviewer on Sonnet
 //   c: no challenge round; one Sonnet deep-pass reviewer on the whole diff
-//   d: the winner of b and c, plus prechecks (the default)
+//   d: c, the winner of the live A/B on both gold cases, plus prechecks (the default)
 // TODO: once the A/B picks a winner, fold it into the default and drop the losing variants.
 const VARIANTS = {
   a: { generalModel: 'haiku', challengeRound: true, deepPass: false, prechecks: false },
   b: { generalModel: 'sonnet', challengeRound: true, deepPass: false, prechecks: false },
   c: { generalModel: 'haiku', challengeRound: false, deepPass: true, prechecks: false },
-  // Provisionally a plus prechecks, until the A/B decides between b and c.
-  d: { generalModel: 'haiku', challengeRound: true, deepPass: false, prechecks: true },
+  d: { generalModel: 'haiku', challengeRound: false, deepPass: true, prechecks: true },
 }
 const DEFAULT_VARIANT = 'd'
 export const DEEP_PASS_MODEL = 'sonnet'
