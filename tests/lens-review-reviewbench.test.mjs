@@ -312,6 +312,36 @@ describe('reviewbench/live-gate.mjs — no live run without an approved count an
     assert.equal(checkGate({ kind: 'review', requested: 1, estimateUsd: 9, approval, ledger }).allowed, true)
   })
 
+  test('refuses a missing or non-positive estimate, since a zero estimate would make the budget check a no-op', () => {
+    for (const estimateUsd of [undefined, 0, -1]) {
+      const verdict = checkGate({ kind: 'review', requested: 1, estimateUsd, approval, ledger: [] })
+      assert.equal(verdict.allowed, false)
+      assert.match(verdict.reason, /estimate/)
+    }
+  })
+
+  test('charges a run that ended without an actual cost (every judge run) its estimate', () => {
+    const ledger = [
+      { kind: 'judge', run: 'pilot', key: 'k1', event: 'start', estimatedUsd: 3 },
+      { kind: 'judge', run: 'pilot', key: 'k1', event: 'end', actualUsd: null },
+    ]
+    // Spent: 3 (the estimate, since the judge reports no cost); one more at 4 would reach 7 > 6.
+    assert.equal(checkGate({ kind: 'judge', requested: 1, estimateUsd: 4, approval, ledger }).allowed, false)
+    assert.equal(checkGate({ kind: 'judge', requested: 1, estimateUsd: 3, approval, ledger }).allowed, true)
+  })
+
+  test('the CLI reserve records the start in the same step as the check, so the next reserve sees it', () => {
+    const workDir = makeTempDir('reviewbench-work')
+    writeApproval(workDir, { review: { count: 1, maxUsd: 10 } })
+    const reserve = key => runScript('node', [LIVE_GATE, 'reserve', '--work', workDir, '--kind', 'review', '--run', 'pilot', '--key', key, '--count', '1', '--estimate-usd', '4'])
+    assert.equal(reserve('k1').status, 0)
+    assert.deepEqual(readLedger(workDir).map(entry => [entry.event, entry.key, entry.estimatedUsd]), [['start', 'k1', 4]])
+    const second = reserve('k2')
+    assert.notEqual(second.status, 0)
+    assert.match(second.stderr, /^lens-review: .*count/m)
+    assert.equal(readLedger(workDir).length, 1)
+  })
+
   test('the CLI exits non-zero with a lens-review: message when the work dir holds no approval', () => {
     const workDir = makeTempDir('reviewbench-work')
     const result = runScript('node', [LIVE_GATE, 'check', '--work', workDir, '--kind', 'review', '--count', '1', '--estimate-usd', '4'])
@@ -344,6 +374,25 @@ describe('reviewbench/leak-check.mjs — a review that looked up the upstream PR
   test('flags any web tool call', () => {
     const log = streamOf({ name: 'WebFetch', input: { url: 'https://example.com' } }, { name: 'WebSearch', input: { query: `${NWO} pull ${PR_NUMBER}` } })
     assert.equal(findLeaks(log).length, 2)
+  })
+
+  test('passes lens-review\'s own current-branch PR lookup, which cannot reach a PR from a checkout with no remote', () => {
+    const log = streamOf({ name: 'Bash', input: { command: 'gh pr view --json url,headRefOid' } })
+    assert.deepEqual(findLeaks(log), [])
+  })
+
+  test('flags a gh call that names a PR or a repo', () => {
+    const log = streamOf(
+      { name: 'Bash', input: { command: `gh pr view https://github.com/${NWO}/pull/${PR_NUMBER} --json comments` } },
+      { name: 'Bash', input: { command: `gh pr view ${PR_NUMBER} -R ${NWO}` } },
+      { name: 'Bash', input: { command: `gh api repos/${NWO}/pulls/${PR_NUMBER}/comments` } },
+    )
+    assert.equal(findLeaks(log).length, 3)
+  })
+
+  test('flags any MCP tool call', () => {
+    const log = streamOf({ name: 'mcp__github__get_pull_request', input: { owner: 'acme', repo: 'widgets', pullNumber: PR_NUMBER } })
+    assert.equal(findLeaks(log).length, 1)
   })
 
   test('refuses a log line that is not JSON rather than skipping it', () => {
@@ -459,8 +508,15 @@ describe('reviewbench/run-case.sh — one gated, isolated live review', () => {
     assert.ok(args.includes('-p'))
     assert.ok(args.includes(`/lens-review --base ${base}`))
     for (const rule of [NO_PR_POSTING_RULE, 'Bash(gh:*)', 'WebFetch', 'WebSearch']) assert.ok(args.includes(rule), `missing ${rule}`)
-    assert.ok(args.includes('--max-budget-usd'))
+    // The per-run cap is the same number the gate charged for the run.
+    assert.equal(args[args.indexOf('--max-budget-usd') + 1], '4')
     assert.ok(args.includes('stream-json'))
+    // Only project settings (the linked skill), and no MCP servers: the developer's own CLAUDE.md,
+    // plugins, hooks and MCP servers must not shape or leak into a benchmark run.
+    assert.equal(args[args.indexOf('--setting-sources') + 1], 'project')
+    assert.ok(args.includes('--strict-mcp-config'))
+    assert.ok(!args.includes('--dangerously-skip-permissions'))
+    assert.ok(!args.includes('bypassPermissions'))
     const env = readText(envFile)
     assert.match(env, new RegExp(`LENS_REVIEW_HOME=${workDir}/`))
     assert.match(env, /PWD=.*\/checkout$/m)
@@ -488,6 +544,16 @@ describe('reviewbench/run-case.sh — one gated, isolated live review', () => {
     assert.notEqual(second.status, 0)
     assert.match(second.stderr, /^lens-review: .*count/m)
     assert.equal(fs.existsSync(argsFile), false)
+  })
+
+  test('refuses before starting claude when the checkout carries its own Claude Code settings', () => {
+    writeApproval(workDir, { review: { count: 1, maxUsd: 10 } })
+    writeFiles(path.join(caseDir, 'checkout'), { '.claude/settings.json': JSON.stringify({ hooks: {} }) })
+    const result = runCase(writeFakeClaude(binDir, { skillDir: SKILL_DIR }))
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /^lens-review: .*\.claude\/settings\.json/m)
+    assert.equal(fs.existsSync(argsFile), false)
+    assert.deepEqual(readLedger(workDir), [])
   })
 
   test('drops a run that reached GitHub instead of scoring it', () => {
