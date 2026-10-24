@@ -5,7 +5,8 @@
 //
 //   node render-prompts.mjs <run-dir> <team-dir> [--phase review|challenge|skeptic]
 //     review (default): prompt-anthropic.txt and prompt-<stem>.txt per selected persona
-//       → {agents: [{stem, reviewer, model, promptPath}], collectArgs} on stdout
+//       (plus prompt-deep-pass.txt when the variant has a deep pass)
+//       → {agents: [{stem, reviewer, model, promptPath}], collectArgs, challengeRound, variant} on stdout
 //     challenge: prompt-votes-<stem>.txt per selected persona → {voters: [{stem, reviewer, promptPath}]}
 //     skeptic: prompt-skeptic.txt → {model, promptPath}
 //   reads <run-dir>/pr-context.txt, rule-sources.json, plan-docs.json, panel.json, and
@@ -14,6 +15,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fail, isRunDirectly, readJsonArrayFile, readJsonFile, readTextFile } from './lib/cli.mjs'
+import { DEEP_PASS_MODEL, currentVariant } from './lib/variant.mjs'
 
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -35,6 +37,7 @@ export const CATEGORIES = [
 export const REVIEWER_MODEL = 'haiku'
 export const SKEPTIC_MODEL = 'opus'
 const GENERAL_REVIEWER = { stem: 'anthropic', reviewer: 'Anthropic' }
+const DEEP_PASS_REVIEWER = { stem: 'deep-pass', reviewer: 'Deep Pass' }
 const CHECKLIST_PERSONA = 'maintainer.md'
 // The two personas whose findings depend on what the plan says.
 const PLAN_READING_PERSONAS = ['domain-expert.md', 'data-steward.md']
@@ -79,20 +82,24 @@ function planNote({ passed, fromPr }) {
   ].join('\n')
 }
 
-function reviewPrompts(runDir, teamDir) {
+function reviewPrompts(runDir, teamDir, variant) {
   const prContext = readTextFile(path.join(runDir, 'pr-context.txt')).trim()
   const ruleSourcePaths = readJsonArrayFile(path.join(runDir, 'rule-sources.json')).map(source => source.path).join('\n') || 'none'
   const planDocs = readPlanDocs(runDir)
   const selected = readSelected(runDir)
   const categories = CATEGORIES.join(', ')
-  const general = {
-    ...GENERAL_REVIEWER,
-    text: fill(template('reviewer-general-prompt.md'), runDir, {
+  const wholeDiffReviewer = ({ stem, reviewer }, templateName, model) => ({
+    stem,
+    reviewer,
+    model,
+    text: fill(template(templateName), runDir, {
       PR_TITLE_AND_DESCRIPTION: prContext,
       CATEGORIES: categories,
-      REPLY_FILE: path.join(runDir, `reply-${GENERAL_REVIEWER.stem}.txt`),
+      REPLY_FILE: path.join(runDir, `reply-${stem}.txt`),
     }),
-  }
+  })
+  const general = wholeDiffReviewer(GENERAL_REVIEWER, 'reviewer-general-prompt.md', variant.generalModel)
+  const deepPass = variant.deepPass ? [wholeDiffReviewer(DEEP_PASS_REVIEWER, 'reviewer-deep-pass-prompt.md', DEEP_PASS_MODEL)] : []
   const personaTemplate = template('reviewer-persona-prompt.md')
   const checklist = template('checklist.md').trim()
   const personas = selected.map(({ file, name, matchedBy = [] }) => {
@@ -107,9 +114,14 @@ function reviewPrompts(runDir, teamDir) {
       CATEGORIES: categories,
       REPLY_FILE: path.join(runDir, `reply-${stem}.txt`),
     })
-    return { stem, reviewer: name, text: file === CHECKLIST_PERSONA ? `${text.trimEnd()}\n\nCHECKLIST:\n${checklist}\n` : text }
+    return {
+      stem,
+      reviewer: name,
+      model: REVIEWER_MODEL,
+      text: file === CHECKLIST_PERSONA ? `${text.trimEnd()}\n\nCHECKLIST:\n${checklist}\n` : text,
+    }
   })
-  return [general, ...personas]
+  return [general, ...deepPass, ...personas]
 }
 
 function challengePrompts(runDir) {
@@ -151,13 +163,16 @@ function writePrompts(runDir, prompts) {
 }
 
 function render(phase, runDir, teamDir) {
+  const variant = currentVariant()
   switch (phase) {
     case 'review': {
-      const prompts = reviewPrompts(runDir, teamDir)
+      const prompts = reviewPrompts(runDir, teamDir, variant)
       writePrompts(runDir, prompts)
       return {
-        agents: prompts.map(({ stem, reviewer }) => ({ stem, reviewer, model: REVIEWER_MODEL, promptPath: promptPath(runDir, stem) })),
+        agents: prompts.map(({ stem, reviewer, model }) => ({ stem, reviewer, model, promptPath: promptPath(runDir, stem) })),
         collectArgs: prompts.map(({ stem, reviewer }) => `${stem}=${reviewer}`),
+        challengeRound: variant.challengeRound,
+        variant: variant.name,
       }
     }
     case 'challenge': {

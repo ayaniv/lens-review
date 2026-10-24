@@ -180,6 +180,24 @@ describe('skill layout', () => {
     assert.doesNotMatch(skill, /<<<(PERSONA_FILE|CATEGORIES|PLAN_NOTE|SCOPE_NOTE|MERGED_FINDINGS|TALLIED_FINDINGS_JSON|APPROVED_PLAN_DOCS)>>>/)
   })
 
+  test('clocks every phase into timings.json and prints the Timing line', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    for (const phase of ['gather', 'review', 'challenge', 'skeptic']) {
+      for (const event of ['start', 'end']) {
+        assert.ok(skill.includes(`phase-clock.mjs" "<RUN_DIR>" ${phase} ${event}`), `no clock for ${phase} ${event}`)
+      }
+    }
+    assert.match(skill, /phase-clock\.mjs" "<RUN_DIR>" --summary/)
+    assert.match(skill, /^Timing: /m)
+  })
+
+  test('skips the challenge round when the variant has none, keeping the Challenge round: line', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const challengeStep = skill.slice(skill.indexOf('## Step 3'), skill.indexOf('## Step 4'))
+    assert.match(challengeStep, /`challengeRound` is `false`/)
+    assert.match(challengeStep, /Challenge round: skipped \(variant <name>\)/)
+  })
+
   test('runs each phase\'s deterministic tail as one script call, never by hand', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     assert.match(skill, /scripts\/collect-findings\.mjs" "<RUN_DIR>" "anthropic=Anthropic"/)
@@ -240,8 +258,10 @@ describe('skill layout', () => {
     assert.match(readText(SKEPTIC_PROMPT), /^You are a skeptical senior engineer\./m)
   })
 
-  test('never assigns Sonnet to any step', () => {
-    assert.doesNotMatch(readText(path.join(SKILL_DIR, 'SKILL.md')), /sonnet/i)
+  test('never hardcodes a reviewer model: render-prompts.mjs picks each one from the variant', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    assert.doesNotMatch(skill, /model: "sonnet"/i)
+    assert.match(skill, /spawn one agent per entry in `agents`, with its `model`/)
   })
 
   test('has no dollar sign before a digit, which Claude Code replaces with a skill argument', () => {

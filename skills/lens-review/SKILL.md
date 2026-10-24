@@ -29,6 +29,8 @@ Each persona is a lens on the PR. Five **core** personas (The Architect, The Mai
 
 `scripts/gather-diff.sh` prints a fresh per-run dir as its last line: `RUN_DIR`. It holds `diff.patch`, `files.txt` (the changed files) and `base.txt` (the commit the PR branched from, which casting reads). `head.txt` (written just after) is the commit under review, and `pr-context.txt` the PR's title and description; Step 6 only posts onto a PR whose head is that same commit. Every later file this run writes goes in `RUN_DIR`, so concurrent reviews never clobber each other.
 
+**Clock.** Each phase is clocked into `<RUN_DIR>/timings.json` with `node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" <phase> start|end`. Put each clock call in the same message as the step it marks, never in a turn of its own. Start with `phase-clock.mjs" "<RUN_DIR>" gather start` in the message that writes `head.txt`.
+
 Find the rule files that govern the changed files:
 ```bash
 node "<SKILL_DIR>/scripts/discover-rule-sources.mjs" --repo . --files "<RUN_DIR>/files.txt" > "<RUN_DIR>/rule-sources.json"
@@ -79,7 +81,9 @@ Build every casting input from `<RUN_DIR>/base`. When casting ends, saved or fai
 **Pick the panel:**
 ```bash
 node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<RUN_DIR>/diff.patch" | tee "<RUN_DIR>/panel.json"
+node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" gather end
 ```
+When this run casts, clock it too: `phase-clock.mjs" "<RUN_DIR>" casting start` with the casting agent's spawn and `casting end` with `validate-team.mjs`.
 `scripts/select-team.mjs` returns `{panel, selected: [{file, name, matchedBy}], uncoveredFiles}`. `selected` is the panel for this PR: every core persona plus each scoped persona that a changed file's path matched (Scope) or one of its added or removed lines matched (Signals); `matchedBy` lists those files. Keep `panel` (the `Panel: …` line) and `uncoveredFiles` for the report header.
 
 ---
@@ -89,8 +93,9 @@ node "<SKILL_DIR>/scripts/select-team.mjs" "<TEAM_DIR>" "<RUN_DIR>/files.txt" "<
 Render every reviewer's prompt to a file:
 ```bash
 node "<SKILL_DIR>/scripts/render-prompts.mjs" "<RUN_DIR>" "<TEAM_DIR>"
+node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" review start
 ```
-`scripts/render-prompts.mjs` fills `<SKILL_DIR>/reviewer-general-prompt.md` (the Anthropic-general reviewer) and `<SKILL_DIR>/reviewer-persona-prompt.md` (one per selected persona, with its persona file, its Scope note, the rule source paths, the plan note for The Domain Expert and The Data Steward, and `checklist.md` for The Maintainer) into `<RUN_DIR>/prompt-<stem>.txt`. It prints `{agents: [{stem, reviewer, model, promptPath}], collectArgs}`. Never write or edit a reviewer prompt yourself; the templates and the script are the one place they live.
+`scripts/render-prompts.mjs` fills `<SKILL_DIR>/reviewer-general-prompt.md` (the Anthropic-general reviewer) and `<SKILL_DIR>/reviewer-persona-prompt.md` (one per selected persona, with its persona file, its Scope note, the rule source paths, the plan note for The Domain Expert and The Data Steward, and `checklist.md` for The Maintainer) into `<RUN_DIR>/prompt-<stem>.txt`. It prints `{agents: [{stem, reviewer, model, promptPath}], collectArgs, challengeRound, variant}`; `LENS_REVIEW_VARIANT` (see `scripts/lib/variant.mjs`) decides each agent's model, whether a Sonnet deep-pass reviewer joins, and whether Step 3 runs. Never write or edit a reviewer prompt yourself; the templates and the script are the one place they live.
 
 Then, in a **single message**, spawn one agent per entry in `agents`, with its `model` and this one-line prompt, nothing else:
 ```
@@ -101,6 +106,7 @@ Each reads the diff from `<RUN_DIR>/diff.patch` itself. The Reuse Scout also nee
 **Collect.** Once every reviewer has answered, one call parses each reply and merges them:
 ```bash
 node "<SKILL_DIR>/scripts/collect-findings.mjs" "<RUN_DIR>" "anthropic=Anthropic" "<persona-file-stem>=<persona name>"...
+node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" review end
 ```
 Pass `collectArgs` from `render-prompts.mjs`, one `<stem>=<reviewer>` per agent you spawned, so a finding that leaves out `reviewer` is still credited to the agent that wrote it. It also merges `<RUN_DIR>/precheck.json`, so the precheck findings go through the challenge round and the skeptic like any reviewer's. `scripts/collect-findings.mjs` writes `findings-<stem>.json` per reviewer and `merged.json`, and prints `{failedReviewers, droppedFindings, prechecks, findings}`: a reviewer whose reply file is missing or isn't a findings array is a **failed reviewer**, and the rest still merge. The merge (`scripts/merge-findings.mjs`) folds the same issue flagged by several reviewers into one finding with an `F<n>` id, and drops malformed findings, including any whose file isn't in the diff or whose line falls outside its changed hunks; stderr lists each one. Carry `failedReviewers` and `droppedFindings` into the telemetry. Never re-derive or restate the dedup rule here; the script is the one place it lives.
 
@@ -108,11 +114,12 @@ Pass `collectArgs` from `render-prompts.mjs`, one `<stem>=<reviewer>` per agent 
 
 ## Step 3 — Team challenge round
 
-**Skip only when `merged.json` is `[]`**; then print `Challenge round: skipped (0 findings)` in the telemetry. Otherwise the round always runs; it is the team's chance to push back on each other.
+**Skip only when `merged.json` is `[]`**, then print `Challenge round: skipped (0 findings)` in the telemetry, **or when `render-prompts.mjs` printed `challengeRound` is `false`**, then print `Challenge round: skipped (variant <name>)`. Otherwise the round always runs; it is the team's chance to push back on each other.
 
 Render each persona's ballot prompt (`<SKILL_DIR>/challenge-prompt.md` with `merged.json` filled in):
 ```bash
 node "<SKILL_DIR>/scripts/render-prompts.mjs" "<RUN_DIR>" "<TEAM_DIR>" --phase challenge
+node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" challenge start
 ```
 It prints `{voters: [{stem, reviewer, promptPath}]}`.
 
@@ -122,6 +129,7 @@ It prints `{voters: [{stem, reviewer, promptPath}]}`.
 Once every persona has answered, one call parses each ballot and tallies them:
 ```bash
 node "<SKILL_DIR>/scripts/collect-votes.mjs" "<RUN_DIR>" <persona-file-stem>...
+node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" challenge end
 ```
 `scripts/collect-votes.mjs` writes `votes-<stem>.json` per persona and `tallied.json`, and prints `{voted, failedVoters, contested, droppedVotes}`. The tally (`scripts/tally-challenges.mjs`) attaches each finding's `challenge: {agree, dispute}`, marks it `contested` when disputes outnumber agreements, and drops votes it can't count (unknown ids, unknown verdicts, self-votes) with each one on stderr. When the round is skipped, run it with no stems, so `tallied.json` still exists. Record `Challenge round: <n> personas voted (continued|fresh), <k> contested`.
 
@@ -132,12 +140,15 @@ node "<SKILL_DIR>/scripts/collect-votes.mjs" "<RUN_DIR>" <persona-file-stem>...
 Render the skeptic's prompt (`<SKILL_DIR>/skeptic-prompt.md`, with `tallied.json` and the plan docs filled in: only `passed` docs go in its approved list, the PR's own `fromPr` docs in its unverified one):
 ```bash
 node "<SKILL_DIR>/scripts/render-prompts.mjs" "<RUN_DIR>" "<TEAM_DIR>" --phase skeptic
+node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" skeptic start
 ```
 It prints `{model, promptPath}`. Spawn ONE agent with that `model` (`opus`) and the prompt `Read <promptPath> and follow it exactly.`
 
 Then one call parses its reply, checks it, and builds the final findings:
 ```bash
 node "<SKILL_DIR>/scripts/apply-skeptic.mjs" "<RUN_DIR>"
+node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" skeptic end
+node "<SKILL_DIR>/scripts/phase-clock.mjs" "<RUN_DIR>" --summary
 ```
 `scripts/apply-skeptic.mjs` writes `skeptic.json` and `final-findings.json` (every finding the skeptic kept, unchanged, plus its `skeptic: {verdict, reason}`), and prints `{kept, dropped}`. When the reply is missing or not JSON, or leaves **any** finding id from `tallied.json` without a keep/drop verdict, it exits non-zero naming the ids: **stop** and show that. A finding the skeptic never ruled on would otherwise vanish from the report without a trace. Never print the unfiltered findings as the final review. When `tallied.json` is `[]`, skip the skeptic and run the script anyway: it writes an empty `final-findings.json`.
 
@@ -205,6 +216,7 @@ Cost breakdown (spawned agents only; this orchestrating session's own turns are 
   Total subagent:              ~Xk tokens   ~$X.XX
 Challenge round: <n> personas voted (continued|fresh), <k> contested   | or: Challenge round: skipped (0 findings)
 Prechecks: <findings> findings (<byCheck, e.g. untested-failure-path 1, migration-order 1>) in <ms> ms; failed checks: <failedChecks, or none>
+Timing: <the line phase-clock.mjs --summary printed>
 Failed reviewers: <names, or none>
 Dropped: <N> malformed findings, <M> votes
 ```
@@ -234,7 +246,7 @@ Run this after the report whenever the review is of a GitHub PR. Posting writes 
 
 ## Cost
 
-Every reviewer, persona and challenge turn runs on **Haiku 5.5** (USD 0.10 in / USD 0.50 out per million tokens, for prompts up to 100K tokens; USD 0.50 / USD 2.50 beyond). Only casting (first run per repo) and the skeptic run on **Opus 5.5** (USD 4 / USD 20). No other model is used.
+Every reviewer, persona and challenge turn runs on **Haiku 5.5** (USD 0.10 in / USD 0.50 out per million tokens, for prompts up to 100K tokens; USD 0.50 / USD 2.50 beyond). Only casting (first run per repo) and the skeptic run on **Opus 5.5** (USD 4 / USD 20). No other model is used. The A/B variants in `scripts/lib/variant.mjs` are the one exception: `b` puts the Anthropic-general reviewer on Sonnet, and `c` adds one Sonnet deep-pass reviewer.
 
 | Agent | Count | Model |
 |---|---|---|

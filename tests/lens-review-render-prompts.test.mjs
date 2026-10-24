@@ -159,3 +159,53 @@ describe('render-prompts.mjs', () => {
     assert.match(noDirs.stderr, /usage/)
   })
 })
+
+describe('the A/B variants (LENS_REVIEW_VARIANT)', () => {
+  let runDir
+  let teamDir
+
+  beforeEach(() => {
+    runDir = makeTempDir('variant-run')
+    teamDir = makeTempDir('variant-team')
+    writeFiles(teamDir, { 'maintainer.md': PERSONA('The Maintainer') })
+    writeFiles(runDir, {
+      'pr-context.txt': 'A change\n',
+      'rule-sources.json': '[]',
+      'plan-docs.json': JSON.stringify({ passed: [], fromPr: [] }),
+      'panel.json': JSON.stringify({ selected: [{ file: 'maintainer.md', name: 'The Maintainer', matchedBy: [] }] }),
+    })
+  })
+
+  const renderAs = variant =>
+    runScript('node', [RENDER_PROMPTS, runDir, teamDir], { env: { ...process.env, LENS_REVIEW_VARIANT: variant } })
+
+  test('a: every reviewer on Haiku, with the challenge round', () => {
+    const { agents, challengeRound } = JSON.parse(renderAs('a').stdout)
+    assert.ok(agents.every(agent => agent.model === 'haiku'))
+    assert.equal(challengeRound, true)
+  })
+
+  test('b: the Anthropic-general reviewer on Sonnet, the rest as a', () => {
+    const { agents, challengeRound } = JSON.parse(renderAs('b').stdout)
+    assert.equal(agents.find(agent => agent.stem === 'anthropic').model, 'sonnet')
+    assert.equal(agents.find(agent => agent.stem === 'maintainer').model, 'haiku')
+    assert.equal(challengeRound, true)
+  })
+
+  test('c: no challenge round, and one Sonnet deep-pass reviewer on the whole diff', () => {
+    const result = renderAs('c')
+    assert.equal(result.status, 0, result.stderr)
+    const { agents, challengeRound, collectArgs } = JSON.parse(result.stdout)
+    assert.equal(challengeRound, false)
+    const deepPass = agents.find(agent => agent.stem === 'deep-pass')
+    assert.equal(deepPass.model, 'sonnet')
+    assert.ok(collectArgs.includes('deep-pass=Deep Pass'))
+    assert.doesNotMatch(readText(deepPass.promptPath), UNFILLED_RE)
+  })
+
+  test('an unknown variant fails naming it, rather than silently running the default', () => {
+    const result = renderAs('z')
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /LENS_REVIEW_VARIANT "z"/)
+  })
+})

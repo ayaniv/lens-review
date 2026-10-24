@@ -301,6 +301,16 @@ describe('precheck.mjs', () => {
     assert.deepEqual(JSON.parse(result.stdout).byCheck, { 'unchecked-field': 1 })
   })
 
+  test('writes no findings under a variant that runs without prechecks, and says so', () => {
+    const repoDir = fixtureRepo({}, { 'src/merge.js': lines("export const key = finding => finding.duplicates?.split(':')[0]") })
+    const runDir = makeTempDir('precheck-run')
+    fs.writeFileSync(path.join(runDir, 'diff.patch'), `${git(repoDir, 'diff', '--src-prefix=a/', '--dst-prefix=b/', 'main...feature')}\n`)
+    const result = runScript('node', [PRECHECK, runDir, '--repo', repoDir], { env: { ...process.env, LENS_REVIEW_VARIANT: 'a' } })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(readText(path.join(runDir, 'precheck.json'))), [])
+    assert.equal(JSON.parse(result.stdout).skipped, 'variant a runs without prechecks')
+  })
+
   test('fails naming the run dir when it holds no diff.patch', () => {
     const result = runScript('node', [PRECHECK, makeTempDir('precheck-empty')])
     assert.notEqual(result.status, 0)

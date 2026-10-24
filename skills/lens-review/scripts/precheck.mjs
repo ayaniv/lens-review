@@ -11,6 +11,7 @@ import path from 'node:path'
 import { fail, isRunDirectly, readTextFile } from './lib/cli.mjs'
 import { parseDiffFiles } from './lib/diff.mjs'
 import { openRepo } from './lib/repo.mjs'
+import { currentVariant } from './lib/variant.mjs'
 import { writeJson } from './parse-reply.mjs'
 import { isPlanDoc } from './discover-plan-docs.mjs'
 import { untestedFailurePath } from './prechecks/untested-failure-path.mjs'
@@ -61,7 +62,20 @@ if (isRunDirectly(import.meta.url)) {
   const startedAt = Date.now()
   const { runDir, repoDir, passedPlans } = parseArgs(process.argv.slice(2))
   if (!runDir || runDir.startsWith('--')) fail('usage: precheck.mjs <run-dir> [--repo <dir>] [--plan <path>]...')
-  const diffFiles = parseDiffFiles(readTextFile(path.join(runDir, 'diff.patch')))
+  const diffPatch = readTextFile(path.join(runDir, 'diff.patch'))
+  let variant
+  try {
+    variant = currentVariant()
+  } catch (error) {
+    fail(error.message)
+  }
+  if (!variant.prechecks) {
+    // An empty precheck.json keeps every later step the same; only the findings are missing.
+    writeJson(path.join(runDir, 'precheck.json'), [])
+    console.log(JSON.stringify({ findings: 0, byCheck: {}, failedChecks: [], skipped: `variant ${variant.name} runs without prechecks` }))
+    process.exit(0)
+  }
+  const diffFiles = parseDiffFiles(diffPatch)
   const repo = openRepo(repoDir, readOptional(path.join(runDir, 'head.txt')))
   const changedPlanDocs = diffFiles.map(file => file.path).filter(isPlanDoc)
   const planDocs = [
