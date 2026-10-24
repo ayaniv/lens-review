@@ -4,7 +4,8 @@
 // join the merge like any reviewer's, so the challenge round and the skeptic still rule on them.
 //
 //   node precheck.mjs <run-dir> [--repo <dir>] [--plan <path>]...
-//     reads <run-dir>/diff.patch, head.txt (the commit to read the repo at) and files.txt,
+//     reads <run-dir>/diff.patch, head.txt (the commit to read the repo at; required) and
+//     base-tip.txt (the base branch now, for migrations merged since the branch was cut),
 //     writes precheck.json → {findings, byCheck, failedChecks, ms} on stdout
 import fs from 'node:fs'
 import path from 'node:path'
@@ -76,13 +77,24 @@ if (isRunDirectly(import.meta.url)) {
     process.exit(0)
   }
   const diffFiles = parseDiffFiles(diffPatch)
-  const repo = openRepo(repoDir, readOptional(path.join(runDir, 'head.txt')))
+  const head = readOptional(path.join(runDir, 'head.txt'))
+  if (!head) fail(`${path.join(runDir, 'head.txt')} is missing or empty: write it before running the prechecks`)
+  const baseTip = readOptional(path.join(runDir, 'base-tip.txt'))
+  if (!baseTip) console.error(`lens-review: no base-tip.txt in ${runDir}; migration-order sees only the migrations at the head`)
+  let repo
+  let baseTipFiles
+  try {
+    repo = openRepo(repoDir, head)
+    baseTipFiles = baseTip ? repo.filesAt(baseTip) : []
+  } catch (error) {
+    fail(error.message)
+  }
   const changedPlanDocs = diffFiles.map(file => file.path).filter(isPlanDoc)
   const planDocs = [
     ...passedPlans.map(planPath => ({ path: planPath, text: readTextFile(planPath) })),
     ...changedPlanDocs.map(planPath => ({ path: planPath, text: repo.read(planPath) ?? '' })),
   ]
-  const { findings, failedChecks } = runPrechecks({ diffFiles, repo, planDocs })
+  const { findings, failedChecks } = runPrechecks({ diffFiles, repo, planDocs, baseTipFiles })
   for (const { check, reason } of failedChecks) console.error(`lens-review: precheck ${check} failed: ${reason}`)
   writeJson(path.join(runDir, 'precheck.json'), findings)
   const byCheck = {}

@@ -233,11 +233,21 @@ describe('skill layout', () => {
     assert.match(readText(SKEPTIC_PROMPT), /Never drop a finding about real people's personal details because nothing proves the people are real/)
   })
 
+  test('Step 1 runs the pre-checks only after head.txt is written, and a PR URL review fetches the PR head and its base', () => {
+    const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
+    const turns = skill.slice(skill.indexOf('**Turns.**'), skill.indexOf('**Failure rule.**'))
+    assert.match(turns, /`head\.txt` first, then `discover-rule-sources\.mjs`, `discover-plan-docs\.mjs`, `precheck\.mjs` and `team-dir\.mjs` together/)
+    const step1 = skill.slice(skill.indexOf('## Step 1 '), skill.indexOf('## Step 1b'))
+    assert.match(step1, /git fetch --quiet origin "pull\/<NUMBER>\/head" "<BASE_REF_NAME>"/)
+    assert.match(step1, /gather-diff\.sh" --diff <that file> --base "origin\/<BASE_REF_NAME>"/)
+  })
+
   // A live carpool run lost its whole review to a skeptic that skipped 2 of 23 ids.
   test('asks the skeptic once for the ids it left unruled before stopping', () => {
     const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
     const skepticStep = skill.slice(skill.indexOf('## Step 4'), skill.indexOf('## Step 5'))
     assert.match(skepticStep, /`SendMessage` the same skeptic once/)
+    assert.match(skepticStep, /load `SendMessage` with `ToolSearch` \(`select:SendMessage`\)[^.]*, then `SendMessage` the same skeptic once/, 'the default skips Step 3, the only other place that loads it')
     assert.match(skepticStep, /If it still leaves one unruled, \*\*stop\*\*/)
   })
 

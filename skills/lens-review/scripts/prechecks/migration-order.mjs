@@ -35,13 +35,15 @@ function plannedMigrations(planDocs, knownStems) {
   return [...planned.values()]
 }
 
-export function migrationOrder({ diffFiles, repo, planDocs = [] }) {
+// `baseTipFiles` lists the base branch as it is now: a sibling migration merged after this
+// branch was cut is there, not at the head.
+export function migrationOrder({ diffFiles, repo, planDocs = [], baseTipFiles = [] }) {
   const newMigrations = diffFiles.filter(
     file => file.isNew && MIGRATION_DIR_RE.test(path.posix.dirname(file.path)) && versionOf(path.posix.basename(file.path)),
   )
   if (newMigrations.length === 0) return []
   const newPaths = new Set(newMigrations.map(file => file.path))
-  const repoFiles = repo.files()
+  const repoFiles = [...new Set([...repo.files(), ...baseTipFiles])]
   const knownStems = new Set(repoFiles.map(file => stem(path.posix.basename(file))))
   const planned = plannedMigrations(planDocs, knownStems)
   const findings = []

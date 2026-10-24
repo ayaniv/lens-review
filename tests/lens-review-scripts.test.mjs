@@ -141,6 +141,18 @@ describe('gather-diff.sh', () => {
     assert.deepEqual(changedFiles.sort(), ['src/a.ts', 'src/b.ts'])
   })
 
+  test('writes base-tip.txt, the base branch as it is now, beside base.txt, the commit the branch was cut from', () => {
+    git(repoDir, 'checkout', '-q', 'main')
+    writeFiles(repoDir, { 'src/later.ts': 'export const later = 1\n' })
+    git(repoDir, 'add', '-A')
+    git(repoDir, 'commit', '-q', '-m', 'merged after the branch was cut')
+    git(repoDir, 'checkout', '-q', 'feature')
+    const runDir = lastLine(runScript('bash', [GATHER_DIFF, '--base', 'main'], { cwd: repoDir }).stdout)
+    const readRunFile = name => fs.readFileSync(path.join(runDir, name), 'utf8').trim()
+    assert.equal(readRunFile('base-tip.txt'), git(repoDir, 'rev-parse', 'main'))
+    assert.notEqual(readRunFile('base.txt'), readRunFile('base-tip.txt'))
+  })
+
   test('two runs never share a run dir (no clobbering between concurrent reviews)', () => {
     const first = lastLine(runScript('bash', [GATHER_DIFF, '--base', 'main'], { cwd: repoDir }).stdout)
     const second = lastLine(runScript('bash', [GATHER_DIFF, '--base', 'main'], { cwd: repoDir }).stdout)

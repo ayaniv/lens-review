@@ -284,6 +284,14 @@ describe('prechecks/migration-order.mjs', () => {
     assert.match(finding.description, /20260301000000_later/)
   })
 
+  test('flags a new migration that sorts before one merged to the base after the branch was cut', () => {
+    const change = changeOf(existing, { 'db/migrations/20260201000000_new.sql': lines('create table c ();') })
+    const sibling = migrationOrder({ ...change, baseTipFiles: ['db/migrations/20260101000000_init.sql', 'db/migrations/20260301000000_sibling.sql'] })
+    assert.equal(sibling.length, 1)
+    assert.match(sibling[0].description, /20260301000000_sibling, which is already merged/)
+    assert.deepEqual(migrationOrder(change), [], 'at the head alone the sibling is invisible')
+  })
+
   test('flags a new migration that sorts after a planned one the plan doc names but nothing has merged', () => {
     const change = changeOf(existing, {
       'db/migrations/20260201000001_second.sql': lines('create table c ();'),
@@ -348,6 +356,42 @@ describe('precheck.mjs', () => {
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(JSON.parse(readText(path.join(runDir, 'precheck.json'))), [])
     assert.equal(JSON.parse(result.stdout).skipped, 'variant a runs without prechecks')
+  })
+
+  function precheckRun(repoDir, { head } = {}) {
+    const runDir = makeTempDir('precheck-run')
+    fs.writeFileSync(path.join(runDir, 'diff.patch'), `${git(repoDir, 'diff', '--src-prefix=a/', '--dst-prefix=b/', 'main...feature')}\n`)
+    if (head) fs.writeFileSync(path.join(runDir, 'head.txt'), head)
+    return runDir
+  }
+
+  test('fails when head.txt is not written yet, rather than reading the working tree', () => {
+    const repoDir = fixtureRepo({}, { 'src/a.js': lines('export const a = 1') })
+    const result = runScript('node', [PRECHECK, precheckRun(repoDir), '--repo', repoDir])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /lens-review: .*head\.txt/)
+  })
+
+  test('fails when the commit under review is not in the repo (a PR head never fetched), naming it', () => {
+    const repoDir = fixtureRepo({}, { 'src/a.js': lines('export const a = 1') })
+    const missing = 'f'.repeat(40)
+    const result = runScript('node', [PRECHECK, precheckRun(repoDir, { head: missing }), '--repo', repoDir])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, new RegExp(`lens-review: commit ${missing} is not in .*fetch it`))
+  })
+
+  test('reads the merged migrations at base-tip.txt too, when the run has one', () => {
+    const repoDir = fixtureRepo({ 'db/migrations/20260101000000_init.sql': lines('create table a ();') }, { 'db/migrations/20260201000000_new.sql': lines('create table c ();') })
+    git(repoDir, 'checkout', '-q', 'main')
+    writeFiles(repoDir, { 'db/migrations/20260301000000_sibling.sql': lines('create table b ();') })
+    git(repoDir, 'add', '-A')
+    git(repoDir, 'commit', '-q', '-m', 'sibling merged')
+    git(repoDir, 'checkout', '-q', 'feature')
+    const runDir = precheckRun(repoDir, { head: git(repoDir, 'rev-parse', 'feature') })
+    fs.writeFileSync(path.join(runDir, 'base-tip.txt'), git(repoDir, 'rev-parse', 'main'))
+    const result = runScript('node', [PRECHECK, runDir, '--repo', repoDir])
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(readText(path.join(runDir, 'precheck.json'))).map(finding => finding.check), ['migration-order'])
   })
 
   test('fails naming the run dir when it holds no diff.patch', () => {
