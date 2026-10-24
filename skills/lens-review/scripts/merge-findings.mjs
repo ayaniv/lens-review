@@ -5,6 +5,7 @@
 //
 //   node merge-findings.mjs --diff <diff.patch> <findings.json>...   → merged JSON array on stdout
 import { fail, isRunDirectly, readJsonArrayFile, readTextFile, reportDropped } from './lib/cli.mjs'
+import { walkDiff } from './lib/diff.mjs'
 
 // Two findings in the same file and category are one issue when their lines are this close.
 export const DEDUP_LINE_WINDOW = 3
@@ -20,20 +21,12 @@ export function normalizeCategory(category) {
 export function parseDiffLines(patchText) {
   const diffLines = new Map()
   let ranges = null
-  for (const line of patchText.split('\n')) {
-    const fileMatch = line.match(/^\+\+\+ b\/(.*)$/)
-    if (fileMatch) {
-      ranges = []
-      diffLines.set(fileMatch[1], ranges)
-    } else if (line.startsWith('+++ ') || line.startsWith('diff --git ')) {
-      ranges = null
-    } else if (ranges) {
-      const hunkMatch = line.match(/^@@ -\S+ \+(\d+)(?:,(\d+))? @@/)
-      if (hunkMatch) {
-        const start = Number(hunkMatch[1])
-        const count = hunkMatch[2] === undefined ? 1 : Number(hunkMatch[2])
-        if (count > 0) ranges.push([start, start + count - 1])
-      }
+  for (const event of walkDiff(patchText)) {
+    if (event.kind === 'file') {
+      ranges = event.newPath ? [] : null
+      if (ranges) diffLines.set(event.newPath, ranges)
+    } else if (ranges && event.kind === 'hunk' && event.newCount > 0) {
+      ranges.push([event.newStart, event.newStart + event.newCount - 1])
     }
   }
   return diffLines

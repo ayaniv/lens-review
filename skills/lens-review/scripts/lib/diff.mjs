@@ -1,22 +1,71 @@
+// Walks a unified diff and yields what each line is. Inside a hunk the @@ header's line counts
+// decide where it ends, so a hunk line that looks like a file header (a removed SQL comment
+// `-- x` is `--- x`, an added `++ x` is `+++ x`) still counts as a hunk line. A line no hunk
+// line can start with (`diff --git`, say) ends the hunk early, for a patch whose counts are off.
+//   {kind: 'file', oldPath, newPath}  (null for /dev/null)
+//   {kind: 'hunk', newStart, newCount}
+//   {kind: 'add' | 'remove' | 'context', text, newLine}  (a removal's newLine is the line it sat before)
+export function* walkDiff(patchText) {
+  let oldPath = null
+  let oldRemaining = 0
+  let newRemaining = 0
+  let newLine = 0
+  for (const line of patchText.split('\n')) {
+    const isHunkLine = line === '' || '+- \\'.includes(line[0])
+    if ((oldRemaining > 0 || newRemaining > 0) && !isHunkLine) {
+      oldRemaining = 0
+      newRemaining = 0
+    }
+    if (oldRemaining > 0 || newRemaining > 0) {
+      if (line.startsWith('\\')) continue
+      const marker = line[0]
+      const text = line.slice(1)
+      if (marker === '+') {
+        yield { kind: 'add', text, newLine }
+        newLine++
+        newRemaining--
+      } else if (marker === '-') {
+        yield { kind: 'remove', text, newLine }
+        oldRemaining--
+      } else {
+        // A context line, or an empty one where a tool trimmed the leading space.
+        yield { kind: 'context', text, newLine }
+        newLine++
+        oldRemaining--
+        newRemaining--
+      }
+      continue
+    }
+    const hunk = line.match(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
+    if (line.startsWith('--- ')) {
+      oldPath = line.match(/^--- a\/(.*)$/)?.[1] ?? null
+    } else if (line.startsWith('+++ ')) {
+      yield { kind: 'file', oldPath, newPath: line.match(/^\+\+\+ b\/(.*)$/)?.[1] ?? null }
+    } else if (hunk) {
+      const [, oldCount = '1', newStart, newCount = '1'] = hunk
+      oldRemaining = Number(oldCount)
+      newRemaining = Number(newCount)
+      newLine = Number(newStart)
+      yield { kind: 'hunk', newStart: Number(newStart), newCount: Number(newCount) }
+    } else if (line.startsWith('diff --git ')) {
+      oldPath = null
+    }
+  }
+}
+
 // Map of each file the diff touches (repo-relative) → the text of every line it adds or
 // removes. Context lines are left out: a line the PR didn't change says nothing about it.
 // A deleted file is keyed by its old path, since it has no new one.
 export function parseChangedLines(patchText) {
   const changedLines = new Map()
-  let oldPath = null
   let lines = null
-  for (const line of patchText.split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      oldPath = null
-      lines = null
-    } else if (line.startsWith('--- ')) {
-      oldPath = line.match(/^--- a\/(.*)$/)?.[1] ?? null
-    } else if (line.startsWith('+++ ')) {
-      const filePath = line.match(/^\+\+\+ b\/(.*)$/)?.[1] ?? oldPath
+  for (const event of walkDiff(patchText)) {
+    if (event.kind === 'file') {
+      const filePath = event.newPath ?? event.oldPath
       lines = filePath ? [] : null
       if (filePath) changedLines.set(filePath, lines)
-    } else if (lines && (line.startsWith('+') || line.startsWith('-'))) {
-      lines.push(line.slice(1))
+    } else if (lines && (event.kind === 'add' || event.kind === 'remove')) {
+      lines.push(event.text)
     }
   }
   return changedLines
@@ -29,27 +78,18 @@ export function parseChangedLines(patchText) {
 export function parseDiffFiles(patchText) {
   const files = []
   let file = null
-  let newLine = 0
-  for (const line of patchText.split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      file = null
-    } else if (line.startsWith('--- ')) {
-      file = { path: null, isNew: line === '--- /dev/null', added: [], removed: [], hunks: [] }
-    } else if (line.startsWith('+++ ') && file) {
-      file.path = line.match(/^\+\+\+ b\/(.*)$/)?.[1] ?? null
-      if (file.path) files.push(file)
-      else file = null
-    } else if (file?.path && line.startsWith('@@')) {
-      const [, start, count = '1'] = line.match(/^@@ -\S+ \+(\d+)(?:,(\d+))?/) ?? [null, '0', '0']
-      newLine = Number(start)
-      file.hunks.push([Number(start), Number(start) + Number(count) - 1])
-    } else if (file?.path && line.startsWith('+')) {
-      file.added.push({ line: newLine, text: line.slice(1) })
-      newLine++
-    } else if (file?.path && line.startsWith('-')) {
-      file.removed.push({ line: newLine, text: line.slice(1) })
-    } else if (file?.path && line.startsWith(' ')) {
-      newLine++
+  for (const event of walkDiff(patchText)) {
+    if (event.kind === 'file') {
+      file = event.newPath ? { path: event.newPath, isNew: event.oldPath === null, added: [], removed: [], hunks: [] } : null
+      if (file) files.push(file)
+    } else if (!file) {
+      continue
+    } else if (event.kind === 'hunk') {
+      file.hunks.push([event.newStart, event.newStart + event.newCount - 1])
+    } else if (event.kind === 'add') {
+      file.added.push({ line: event.newLine, text: event.text })
+    } else if (event.kind === 'remove') {
+      file.removed.push({ line: event.newLine, text: event.text })
     }
   }
   return files

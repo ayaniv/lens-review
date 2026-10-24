@@ -60,6 +60,44 @@ describe('lib/diff.mjs parseDiffFiles', () => {
   })
 })
 
+// A removed SQL comment `-- old` is the hunk line `--- old`, and an added `++ x` is `+++ x`:
+// both look like file headers, and must still count as hunk lines.
+const HEADER_LOOKALIKE_PATCH = [
+  'diff --git a/db/m.sql b/db/m.sql',
+  '--- a/db/m.sql',
+  '+++ b/db/m.sql',
+  '@@ -1,3 +1,4 @@',
+  ' create table t (id int);',
+  '--- old comment',
+  '+-- new comment',
+  '+++ counter',
+  ' insert into t values (1);',
+  'diff --git a/src/b.js b/src/b.js',
+  '--- a/src/b.js',
+  '+++ b/src/b.js',
+  '@@ -1 +1 @@',
+  '-old',
+  '+new',
+  '',
+].join('\n')
+
+describe('lib/diff.mjs: hunk lines that look like file headers', () => {
+  test('parseDiffFiles keeps a removed "-- " line and an added "++ " line inside their hunk', () => {
+    const [sql, js] = parseDiffFiles(HEADER_LOOKALIKE_PATCH)
+    assert.equal(sql.path, 'db/m.sql')
+    assert.deepEqual(sql.removed.map(({ text }) => text), ['-- old comment'])
+    assert.deepEqual(sql.added, [{ line: 2, text: '-- new comment' }, { line: 3, text: '++ counter' }])
+    assert.deepEqual(js.added, [{ line: 1, text: 'new' }])
+  })
+
+  test('parseChangedLines and parseDiffLines see the same two files and lines', async () => {
+    const { parseChangedLines } = await import('../skills/lens-review/scripts/lib/diff.mjs')
+    const { parseDiffLines } = await import('../skills/lens-review/scripts/merge-findings.mjs')
+    assert.deepEqual(parseChangedLines(HEADER_LOOKALIKE_PATCH).get('db/m.sql'), ['-- old comment', '-- new comment', '++ counter'])
+    assert.deepEqual([...parseDiffLines(HEADER_LOOKALIKE_PATCH)], [['db/m.sql', [[1, 4]]], ['src/b.js', [[1, 1]]]])
+  })
+})
+
 describe('prechecks/untested-failure-path.mjs', () => {
   test('flags an error message the diff adds that no test mentions', () => {
     const change = changeOf(
