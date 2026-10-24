@@ -94,6 +94,7 @@ export function untestedFailurePath({ diffFiles, repo }) {
         file,
         line,
         category: 'tests',
+        message,
         description: `No test mentions the error "${message}" that this line adds, so its failure path is untested.`,
         rule: 'Every new error path gets a failure-path test.',
       }),

@@ -443,6 +443,64 @@ describe('merge-findings.mjs', () => {
   })
 })
 
+describe('merge-findings.mjs: one issue under two categories or two files', () => {
+  // Modelled on the carpool A/B runs: two reviewers filed one lookup bug on one line as
+  // correctness and as reliability, and a precheck's untested error and a reviewer's
+  // missing-test finding on the test file named the same error message.
+  const DIFF = [
+    diffSection('supabase/seed.sql', Array(80).fill('+x')),
+    diffSection('src/seed.test.ts', Array(120).fill('+x')),
+  ].join('')
+  let mergeFindings
+  let diffLines
+
+  beforeEach(async () => {
+    let parseDiffLines
+    ;({ mergeFindings, parseDiffLines } = await import(MERGE_FINDINGS))
+    diffLines = parseDiffLines(DIFF)
+  })
+
+  const lookup = overrides => finding({ file: 'supabase/seed.sql', line: 51, ...overrides })
+
+  test('folds two reviewers\' findings on one line that name the same code under different categories', () => {
+    const { findings } = mergeFindings([
+      [lookup({ category: 'correctness', description: 'select parent_id into v_parent_id matches display_name alone, so a shared name picks a random child.', reviewer: 'Anthropic' })],
+      [lookup({ category: 'reliability', line: 52, description: 'The non-strict select into v_parent_id on display_name silently takes the first row.', reviewer: 'Reliability' })],
+    ], diffLines)
+    assert.equal(findings.length, 1)
+    assert.deepEqual(findings[0].reviewers, ['Anthropic', 'Reliability'])
+  })
+
+  test('keeps findings on one line apart when they share no code name, whatever the category', () => {
+    const { findings } = mergeFindings([
+      [lookup({ category: 'correctness', description: 'select parent_id into v_parent_id matches display_name alone.', reviewer: 'Anthropic' })],
+      [lookup({ category: 'performance', description: 'This loop runs one query per drive; batch it.', reviewer: 'Reliability' })],
+    ], diffLines)
+    assert.equal(findings.length, 2)
+  })
+
+  const untestedRaise = finding({
+    file: 'supabase/seed.sql', line: 57, category: 'tests', reviewer: 'Precheck', check: 'untested-failure-path',
+    message: 'no practice on weekday % (add it to schedule_slots first)',
+    description: 'No test mentions the error "no practice on weekday % (add it to schedule_slots first)" that this line adds, so its failure path is untested.',
+  })
+
+  test('folds a reviewer\'s missing-test finding that quotes a precheck\'s untested error into it, keeping both locations', () => {
+    const missingTest = finding({ file: 'src/seed.test.ts', line: 99, category: 'tests', reviewer: 'Deep Pass', description: "The 'no practice on weekday %' branch of the seed has no test." })
+    const { findings } = mergeFindings([[missingTest], [untestedRaise]], diffLines)
+    assert.equal(findings.length, 1)
+    assert.equal(findings[0].file, 'supabase/seed.sql')
+    assert.deepEqual(findings[0].reviewers, ['Precheck', 'Deep Pass'])
+    assert.deepEqual(findings[0].locations.map(({ file, line }) => `${file}:${line}`), ['supabase/seed.sql:57', 'src/seed.test.ts:99'])
+  })
+
+  test('keeps a missing-test finding about a different error apart from the precheck', () => {
+    const otherTest = finding({ file: 'src/seed.test.ts', line: 99, category: 'tests', reviewer: 'Deep Pass', description: 'The unknown area branch has no test.' })
+    const { findings } = mergeFindings([[otherTest], [untestedRaise]], diffLines)
+    assert.equal(findings.length, 2)
+  })
+})
+
 describe('merge-findings.mjs: duplication across copies', () => {
   // Modelled on a real run: three e2e specs each re-declare helpers that an existing spec
   // already has, and a migration copies an older function body. Two reviewers flagged every
