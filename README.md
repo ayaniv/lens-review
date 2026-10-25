@@ -106,6 +106,10 @@ An opt-in live eval runs the real skill through `claude -p` against a seeded PR 
 RUN_LIVE_EVAL=1 npm test
 ```
 
+### Benchmark (ReviewBench)
+
+lens-review can also be scored on [ReviewBench](https://github.com/review-bench/ReviewBench), an open benchmark of 219 real PRs with reference findings and an LLM judge. `tests/lens-review-eval/reviewbench/` holds a container adapter for ReviewBench's agent contract: a Dockerfile, and an entrypoint that runs lens-review headless on each PR and writes its findings in the judge's format. ReviewBench's own `scripts/try-agent.sh` runs the image and its judge scores the results. Reviews run on a Claude subscription token from `claude setup-token`, and every PR is capped by `RB_CONFIG_MAX_BUDGET_USD`. `npm test` checks the adapter with a fake `claude` and spends nothing. The live steps (a 3-PR pilot first) are in [`tech-design.md`](tests/lens-review-eval/reviewbench/tech-design.md#live-runs-after-merge-by-the-developer-only).
+
 ## License
 
 [MIT](LICENSE)
