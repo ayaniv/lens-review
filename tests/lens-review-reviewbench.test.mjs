@@ -98,16 +98,27 @@ describe('reviewbench/to-reviewbench.mjs — lens-review findings in the judge\'
 
 // A stand-in for `claude` that records its arguments, working directory and environment, then
 // prints a lens-review run as stream-json ending in the given result event (or none at all), with
-// any extra raw lines before it.
-function writeFakeClaude(binDir, { findings = [lensFinding('F1')], result = {}, exitCode = 0, findingsLine = true, hasResultEvent = true, extraLines = [] } = {}) {
+// any extra raw lines before it. With `isReportBeforeStep6`, the report is an earlier assistant
+// message and the run ends on Step 6's line, as a real run in the container does: the result
+// event carries only claude's last message.
+const STEP6_LINE = 'Not offered for posting: gh is not available.'
+
+function assistantEvent(text) {
+  return { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } }
+}
+
+function writeFakeClaude(binDir, { findings = [lensFinding('F1')], result = {}, exitCode = 0, findingsLine = true, hasResultEvent = true, extraLines = [], isReportBeforeStep6 = false } = {}) {
   const runDir = makeTempDir('fake-lens-run')
   const finalFindingsPath = path.join(runDir, 'final-findings.json')
   fs.writeFileSync(finalFindingsPath, JSON.stringify(findings))
   const report = findingsLine ? `## Lens Review\n\nFindings JSON: ${finalFindingsPath}\n` : '## Lens Review\n\nNo findings file.\n'
-  const resultEvent = { type: 'result', subtype: 'success', total_cost_usd: 2.5, duration_ms: 1000, result: report, ...result }
+  const lastMessage = isReportBeforeStep6 ? STEP6_LINE : report
+  const resultEvent = { type: 'result', subtype: 'success', total_cost_usd: 2.5, duration_ms: 1000, result: lastMessage, ...result }
+  const messages = isReportBeforeStep6 ? [report, STEP6_LINE] : [report]
   const lines = [
     JSON.stringify({ type: 'system', subtype: 'init' }),
     ...extraLines,
+    ...messages.map(message => JSON.stringify(assistantEvent(message))),
     ...(hasResultEvent ? [JSON.stringify(resultEvent)] : []),
   ]
   const script = [
@@ -218,7 +229,10 @@ describe('reviewbench/agent.mjs — one PR under ReviewBench\'s agent contract',
     assert.equal(args[args.indexOf('--max-budget-usd') + 1], BUDGET_USD)
     assert.equal(args[args.indexOf('--model') + 1], 'claude-opus-5-5')
     assert.equal(args[args.indexOf('--output-format') + 1], 'stream-json')
-    for (const rule of ['WebFetch', 'WebSearch', 'Bash(gh:*)', 'Bash(curl:*)', 'Bash(wget:*)']) assert.ok(args.includes(rule), `missing ${rule}`)
+    // try-agent.sh adds an `upstream` remote at the real repo, whose later commits can hold the
+    // fixes being scored, so reaching any remote through git is shut off too.
+    const deniedRules = ['WebFetch', 'WebSearch', 'Bash(gh:*)', 'Bash(curl:*)', 'Bash(wget:*)', 'Bash(git fetch:*)', 'Bash(git pull:*)', 'Bash(git remote:*)']
+    for (const rule of deniedRules) assert.ok(args.includes(rule), `missing ${rule}`)
     const recordedEnv = readText(envFile)
     // Real paths, since macOS's temp dir is reached through a symlink.
     const recordedCwd = recordedEnv.match(/^PWD=(.*)$/m)[1]
@@ -249,6 +263,12 @@ describe('reviewbench/agent.mjs — one PR under ReviewBench\'s agent contract',
     assert.deepEqual(output.findings.map(finding => [finding.file, finding.start_line, finding.producer]), [['src/a.ts', 2, AGENT]])
     assert.deepEqual(output.usage, { cost_usd: 2.5, time_in_ms: 1000 })
     assert.match(readText(path.join(outDir, 'lens-review.log')), /"type":"result"/)
+  })
+
+  test('finds the report\'s Findings JSON line when Step 6 speaks after it, so the result event lacks it', () => {
+    const result = runAgent({ isReportBeforeStep6: true })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(readText(env.RB_OUT)).findings.map(finding => finding.start_line), [2])
   })
 
   test('a review that kept nothing writes an empty findings array and exits 0', () => {

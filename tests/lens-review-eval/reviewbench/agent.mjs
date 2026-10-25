@@ -64,8 +64,11 @@ function claudeArgs({ base, model, maxBudgetUsd }) {
     // ReviewBench's Codex example bypasses its sandbox. An allowlist that missed one of the tools
     // lens-review needs would fail a PR halfway through a paid run; the deny list still applies.
     '--dangerously-skip-permissions',
-    // Variadic, so it goes last: anything after it would be read as one more tool name.
+    // Variadic, so it goes last: anything after it would be read as one more tool name. The git
+    // rules close try-agent.sh's `upstream` remote, whose later commits can hold the fixes being
+    // scored; local --base mode never fetches, so lens-review itself doesn't need them.
     '--disallowedTools', 'WebFetch', 'WebSearch', 'Bash(gh:*)', 'Bash(curl:*)', 'Bash(wget:*)',
+    'Bash(git fetch:*)', 'Bash(git pull:*)', 'Bash(git remote:*)',
   ]
 }
 
@@ -92,7 +95,7 @@ function runLensReview(settings, logPath) {
   }
 }
 
-function readResultEvent(logPath) {
+function readStreamEvents(logPath) {
   const events = []
   const dropped = []
   for (const line of readTextFile(logPath).split('\n').filter(line => line.trim())) {
@@ -103,14 +106,32 @@ function readResultEvent(logPath) {
     }
   }
   reportDropped('stream lines', dropped)
+  return events
+}
+
+function successfulResultEvent(events, logPath) {
   const resultEvent = events.findLast(event => event.type === 'result')
   if (!resultEvent) fail(`claude's stream has no result event; see ${logPath}`)
   if (resultEvent.subtype !== 'success') fail(`the review ended with ${resultEvent.subtype}, not success; see ${logPath}`)
   return resultEvent
 }
 
-function readFinalFindings(resultEvent, { repoDir }, logPath) {
-  const findingsPath = String(resultEvent.result ?? '').match(/^Findings JSON: (.+)$/m)?.[1]
+// The result event holds only claude's last message, and Step 6 always speaks after the report
+// (in the container its `gh pr view` is denied, so the run ends "Not offered for posting"). So
+// the report is searched for in every assistant text block too, and the last line found wins.
+function streamTexts(events) {
+  return events.flatMap(event => {
+    if (event.type === 'result') return [String(event.result ?? '')]
+    if (event.type !== 'assistant') return []
+    const content = event.message?.content
+    return Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => String(block.text ?? '')) : []
+  })
+}
+
+function readFinalFindings(events, { repoDir }, logPath) {
+  const findingsPath = streamTexts(events)
+    .flatMap(text => [...text.matchAll(/^Findings JSON: (.+)$/gm)].map(match => match[1]))
+    .at(-1)
   if (!findingsPath) fail(`lens-review's report has no "Findings JSON:" line; see ${logPath}`)
   return readJsonArrayFile(path.resolve(repoDir, findingsPath.trim()))
 }
@@ -123,8 +144,9 @@ function main() {
   fs.mkdirSync(path.dirname(settings.outPath), { recursive: true })
   const logPath = path.join(path.dirname(settings.outPath), 'lens-review.log')
   runLensReview(settings, logPath)
-  const resultEvent = readResultEvent(logPath)
-  const finalFindings = readFinalFindings(resultEvent, settings, logPath)
+  const events = readStreamEvents(logPath)
+  const resultEvent = successfulResultEvent(events, logPath)
+  const finalFindings = readFinalFindings(events, settings, logPath)
   const pr = { repo: `https://github.com/${settings.nwo}`, pr_number: settings.prNumber, base: settings.base, head: settings.head }
   const usage = { cost_usd: resultEvent.total_cost_usd, time_in_ms: resultEvent.duration_ms }
   let output
