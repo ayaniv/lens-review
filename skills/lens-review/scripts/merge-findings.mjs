@@ -1,5 +1,6 @@
 // Merges the reviewer agents' findings into one list: the same issue flagged by several
-// reviewers becomes one finding with the highest severity and every reviewer's name, and
+// reviewers becomes one finding with the highest severity, every reviewer's name and each
+// merged-in reviewer's own report, two different problems at one spot stay two findings, and
 // one duplicated helper flagged at each of its copies becomes one finding listing them all.
 // Findings that don't point into the diff under review are dropped, not merged.
 //
@@ -78,18 +79,6 @@ function sharedCodeNameCount(first, second) {
   return [...codeNames(first)].filter(name => secondNames.has(name)).length
 }
 
-// A reviewer never reports one issue twice, so a merged finding takes at most one finding
-// per reviewer: two findings from the same reviewer on the same line are two issues.
-function isSameIssue(merged, finding) {
-  return (
-    merged.file === finding.file &&
-    (normalizeCategory(merged.category) === normalizeCategory(finding.category) ||
-      sharedCodeNameCount(merged, finding) >= MIN_SHARED_CODE_NAMES) &&
-    Math.abs(merged.line - finding.line) <= DEDUP_LINE_WINDOW &&
-    !merged.reviewers.includes(finding.reviewer)
-  )
-}
-
 function words(finding) {
   return new Set(`${finding.rule ?? ''} ${finding.description}`.toLowerCase().match(/[a-z0-9#]{3,}/g) ?? [])
 }
@@ -99,6 +88,29 @@ function sharedWordCount(first, second) {
   return [...words(first)].filter(word => secondWords.has(word)).length
 }
 
+// Two reports of one problem reuse most of each other's words; two problems on one line in one
+// category (a path echoed in an error and a path traversal) share little beyond the code they
+// sit in. Calibrated on the ReviewBench pilot runs: same-problem pairs shared 0.44 or more of
+// the shorter report's words, different-problem pairs 0.30 or less.
+const MIN_SHARED_WORD_SHARE = 0.4
+
+function sharedWordShare(first, second) {
+  return sharedWordCount(first, second) / Math.min(words(first).size, words(second).size)
+}
+
+// A reviewer never reports one issue twice, so a merged finding takes at most one finding
+// per reviewer: two findings from the same reviewer on the same line are two issues.
+function isSameIssue(merged, finding) {
+  return (
+    merged.file === finding.file &&
+    (sharedCodeNameCount(merged, finding) >= MIN_SHARED_CODE_NAMES ||
+      (normalizeCategory(merged.category) === normalizeCategory(finding.category) &&
+        sharedWordShare(merged, finding) >= MIN_SHARED_WORD_SHARE)) &&
+    Math.abs(merged.line - finding.line) <= DEDUP_LINE_WINDOW &&
+    !merged.reviewers.includes(finding.reviewer)
+  )
+}
+
 // Several issues can sit on one line (a raw <button> and its hardcoded color), so pick the
 // one this finding describes rather than whichever was merged first.
 function closestIssue(candidates, finding) {
@@ -106,6 +118,18 @@ function closestIssue(candidates, finding) {
     (best, candidate) => (sharedWordCount(candidate, finding) > sharedWordCount(best, finding) ? candidate : best),
     candidates[0],
   )
+}
+
+// A merged finding shows its first reviewer's description; every other reviewer's own words
+// stay on it, so the skeptic and the report still see what each one reported.
+function toMergedReport({ reviewer, severity, description, rule }) {
+  return { reviewer, severity, description, ...(rule && { rule }) }
+}
+
+// Folding findings that were already merged keeps the reports each one had merged in.
+function foldedMergedReports(findings) {
+  const mergedReports = findings.flatMap(finding => finding.mergedReports ?? [])
+  return mergedReports.length > 0 ? { mergedReports } : {}
 }
 
 function higherSeverity(first, second) {
@@ -134,6 +158,7 @@ function foldDuplicationGroup(group) {
   if (rest.length === 0) return first
   return {
     ...first,
+    ...foldedMergedReports(group),
     severity: rest.reduce((severity, finding) => higherSeverity(severity, finding.severity), first.severity),
     reviewers: [...new Set(group.flatMap(finding => finding.reviewers))],
     duplicates: group.find(finding => finding.duplicates)?.duplicates,
@@ -190,6 +215,7 @@ function foldIntoUntestedErrors(findings) {
       untested.severity = higherSeverity(untested.severity, finding.severity)
       untested.reviewers = [...new Set([...untested.reviewers, ...finding.reviewers])]
       untested.locations = [...(untested.locations ?? [toLocation(untested)]), toLocation(finding)]
+      Object.assign(untested, foldedMergedReports([untested, finding]))
       folded.add(finding)
     }
   }
@@ -213,6 +239,7 @@ export function mergeFindings(findingsPerReviewer, diffLines) {
       existing.severity = higherSeverity(existing.severity, finding.severity)
       existing.reviewers.push(reviewer)
       existing.duplicates ??= finding.duplicates
+      existing.mergedReports = [...(existing.mergedReports ?? []), toMergedReport(finding)]
     } else {
       findings.push({ id: `F${findings.length + 1}`, ...issue, reviewers: [reviewer] })
     }
