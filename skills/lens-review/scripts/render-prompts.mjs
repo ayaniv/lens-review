@@ -9,8 +9,8 @@
 //       → {agents: [{stem, reviewer, model, promptPath}], collectArgs, challengeRound, variant} on stdout
 //     challenge: prompt-votes-<stem>.txt per selected persona → {voters: [{stem, reviewer, promptPath}]}
 //     skeptic: prompt-skeptic.txt → {model, promptPath}
-//   reads <run-dir>/pr-context.txt, rule-sources.json, plan-docs.json, panel.json, and
-//   merged.json (challenge) or tallied.json (skeptic)
+//   reads <run-dir>/pr-context.txt (after context.txt, the caller's --context, when present),
+//   rule-sources.json, plan-docs.json, panel.json, and merged.json (challenge) or tallied.json (skeptic)
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,6 +57,14 @@ function fill(text, runDir, values) {
   })
 }
 
+// The caller's --context (a PR description or other intent text) leads: it states what the PR
+// promises, and pr-context.txt's commit messages or PR body follow it.
+function readPrContext(runDir) {
+  const contextPath = path.join(runDir, 'context.txt')
+  const callerContext = fs.existsSync(contextPath) ? [readTextFile(contextPath).trim()] : []
+  return [...callerContext, readTextFile(path.join(runDir, 'pr-context.txt')).trim()].join('\n\n')
+}
+
 function readPlanDocs(runDir) {
   const planDocs = readJsonFile(path.join(runDir, 'plan-docs.json'))
   if (!Array.isArray(planDocs?.passed) || !Array.isArray(planDocs?.fromPr)) {
@@ -83,7 +91,8 @@ function planNote({ passed, fromPr }) {
 }
 
 function reviewPrompts(runDir, teamDir, variant) {
-  const prContext = readTextFile(path.join(runDir, 'pr-context.txt')).trim()
+  const prContext = readPrContext(runDir)
+  const sharedRules = template('reviewer-shared-rules.md').trim()
   const ruleSourcePaths = readJsonArrayFile(path.join(runDir, 'rule-sources.json')).map(source => source.path).join('\n') || 'none'
   const planDocs = readPlanDocs(runDir)
   const selected = readSelected(runDir)
@@ -94,6 +103,7 @@ function reviewPrompts(runDir, teamDir, variant) {
     model,
     text: fill(template(templateName), runDir, {
       PR_TITLE_AND_DESCRIPTION: prContext,
+      REVIEWER_SHARED_RULES: sharedRules,
       CATEGORIES: categories,
       REPLY_FILE: path.join(runDir, `reply-${stem}.txt`),
     }),
@@ -111,6 +121,7 @@ function reviewPrompts(runDir, teamDir, variant) {
       PR_TITLE_AND_DESCRIPTION: prContext,
       RULE_SOURCE_PATHS: ruleSourcePaths,
       PLAN_NOTE: PLAN_READING_PERSONAS.includes(file) ? planNote(planDocs) : '',
+      REVIEWER_SHARED_RULES: sharedRules,
       CATEGORIES: categories,
       REPLY_FILE: path.join(runDir, `reply-${stem}.txt`),
     })
@@ -151,6 +162,7 @@ const TEAM_VOTES = {
 function skepticPrompt(runDir, variant) {
   const { passed, fromPr } = readPlanDocs(runDir)
   const text = fill(template('skeptic-prompt.md'), runDir, {
+    PR_TITLE_AND_DESCRIPTION: readPrContext(runDir),
     TEAM_VOTES: variant.challengeRound ? TEAM_VOTES.withChallengeRound : TEAM_VOTES.withoutChallengeRound,
     APPROVED_PLAN_DOCS: listOrNone(passed),
     UNVERIFIED_PLAN_DOCS: listOrNone(fromPr),

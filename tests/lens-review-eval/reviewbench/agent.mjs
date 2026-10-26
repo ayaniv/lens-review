@@ -8,6 +8,8 @@
 //   RB_CONFIG_MODEL            optional, default claude-opus-5-5
 //   CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY
 //   RB_REPO                    the checkout, default /work/repo
+//   RB_PR_JSON                 optional, set by ReviewBench: the PR's {title, body, …}, passed
+//                              to lens-review as --context
 //   CLAUDE_BIN                 tests only: a fake `claude`
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -43,7 +45,23 @@ function readSettings(env) {
     model: env.RB_CONFIG_MODEL || DEFAULT_MODEL,
     maxBudgetUsd: env.RB_CONFIG_MAX_BUDGET_USD,
     claudeBin: env.CLAUDE_BIN || 'claude',
+    prJsonPath: env.RB_PR_JSON || null,
   }
+}
+
+// The PR's title and body, the way PR URL mode's pr-context.txt holds them; a PR with no body
+// gives its title alone.
+function readPrDescription(prJsonPath) {
+  const text = readTextFile(prJsonPath)
+  let pr
+  try {
+    pr = JSON.parse(text)
+  } catch (error) {
+    fail(`RB_PR_JSON ${prJsonPath} is not JSON: ${error.message}`)
+  }
+  if (typeof pr?.title !== 'string' || !pr.title.trim()) fail(`RB_PR_JSON ${prJsonPath} has no title`)
+  const body = typeof pr.body === 'string' ? pr.body.trim() : ''
+  return body ? `${pr.title}\n\n${body}\n` : `${pr.title}\n`
 }
 
 function assertCheckoutAtHead({ repoDir, head }) {
@@ -53,9 +71,9 @@ function assertCheckoutAtHead({ repoDir, head }) {
   if (checkedOut !== head) fail(`${repoDir} is checked out at ${checkedOut}, not RB_HEAD ${head}`)
 }
 
-function claudeArgs({ base, model, maxBudgetUsd }) {
+function claudeArgs({ base, model, maxBudgetUsd }, contextPath) {
   return [
-    '-p', `/lens-review --base ${base}`,
+    '-p', `/lens-review --base ${base}${contextPath ? ` --context ${contextPath}` : ''}`,
     '--model', model,
     '--output-format', 'stream-json',
     '--verbose',
@@ -74,11 +92,11 @@ function claudeArgs({ base, model, maxBudgetUsd }) {
 
 // Writes claude's stream-json straight to the log rather than buffering it: a large PR's stream
 // can outgrow spawnSync's output buffer, and the log is what's read by hand after a pilot.
-function runLensReview(settings, logPath) {
+function runLensReview(settings, contextPath, logPath) {
   const lensReviewHome = fs.mkdtempSync(path.join(os.tmpdir(), 'lens-review-home-'))
   const logFd = fs.openSync(logPath, 'w')
   try {
-    const result = spawnSync(settings.claudeBin, claudeArgs(settings), {
+    const result = spawnSync(settings.claudeBin, claudeArgs(settings, contextPath), {
       cwd: settings.repoDir,
       env: {
         ...process.env,
@@ -139,11 +157,14 @@ function readFinalFindings(events, { repoDir }, logPath) {
 function main() {
   const settings = readSettings(process.env)
   assertCheckoutAtHead(settings)
+  const prDescription = settings.prJsonPath ? readPrDescription(settings.prJsonPath) : null
   // The contract asks every agent to print the configuration it applied.
   console.log(`lens-review-reviewbench: model=${settings.model} max_budget_usd=${settings.maxBudgetUsd}`)
   fs.mkdirSync(path.dirname(settings.outPath), { recursive: true })
   const logPath = path.join(path.dirname(settings.outPath), 'lens-review.log')
-  runLensReview(settings, logPath)
+  const contextPath = prDescription ? path.join(path.dirname(settings.outPath), 'pr-context.md') : null
+  if (contextPath) fs.writeFileSync(contextPath, prDescription)
+  runLensReview(settings, contextPath, logPath)
   const events = readStreamEvents(logPath)
   const resultEvent = successfulResultEvent(events, logPath)
   const finalFindings = readFinalFindings(events, settings, logPath)

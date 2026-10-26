@@ -5,6 +5,8 @@ The diff is at <RUN_DIR>/diff.patch. Read it.
 PR context:
 <<<PR_TITLE_AND_DESCRIPTION>>>
 
+<<<REVIEWER_SHARED_RULES>>>
+
 Focus ONLY on:
 - Logic bugs, off-by-one errors, wrong conditionals
 - Race conditions and async correctness (missing awaits, stale closures)

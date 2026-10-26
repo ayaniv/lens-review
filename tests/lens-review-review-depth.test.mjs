@@ -21,7 +21,7 @@ function lastLine(output) {
   return output.trim().split('\n').at(-1)
 }
 
-describe('reviewer prompts look past the diff and file one issue per finding @pending', () => {
+describe('reviewer prompts look past the diff and file one issue per finding', () => {
   let runDir
   let teamDir
 
@@ -115,7 +115,7 @@ describe('reviewer prompts look past the diff and file one issue per finding @pe
   })
 })
 
-describe('gather-diff.sh --context @pending', () => {
+describe('gather-diff.sh --context', () => {
   let repoDir
 
   beforeEach(() => {
@@ -144,7 +144,7 @@ describe('gather-diff.sh --context @pending', () => {
   })
 })
 
-describe('SKILL.md takes --context @pending', () => {
+describe('SKILL.md takes --context', () => {
   const skill = readText(path.join(SKILL_DIR, 'SKILL.md'))
 
   test('documents --context <path> in its usage line', () => {
@@ -161,9 +161,9 @@ describe('SKILL.md takes --context @pending', () => {
   })
 })
 
-describe('prechecks/undeclared-dependency.mjs, end to end through precheck.mjs @pending', () => {
+describe('prechecks/undeclared-dependency.mjs, end to end through precheck.mjs', () => {
   // The same path a real run takes: gather-diff.sh, head.txt, then precheck.mjs at that head.
-  function undeclaredFindings(filesOnMain, filesOnFeature) {
+  function runPrecheck(filesOnMain, filesOnFeature) {
     const repoDir = makeGitRepo({ 'README.md': 'fixture\n', ...filesOnMain }, filesOnFeature)
     const gathered = runScript('bash', [GATHER_DIFF, '--base', 'main'], { cwd: repoDir })
     assert.equal(gathered.status, 0, gathered.stderr)
@@ -171,8 +171,13 @@ describe('prechecks/undeclared-dependency.mjs, end to end through precheck.mjs @
     fs.writeFileSync(path.join(runDir, 'head.txt'), `${git(repoDir, 'rev-parse', 'HEAD')}\n`)
     const result = runScript('node', [PRECHECK, runDir, '--repo', repoDir])
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout).failedChecks, [])
-    return JSON.parse(readText(path.join(runDir, 'precheck.json'))).filter(finding => finding.check === UNDECLARED_DEPENDENCY)
+    return { result, summary: JSON.parse(result.stdout), findings: JSON.parse(readText(path.join(runDir, 'precheck.json'))) }
+  }
+
+  function undeclaredFindings(filesOnMain, filesOnFeature) {
+    const { summary, findings } = runPrecheck(filesOnMain, filesOnFeature)
+    assert.deepEqual(summary.failedChecks, [])
+    return findings.filter(finding => finding.check === UNDECLARED_DEPENDENCY)
   }
 
   const PYPROJECT = deps => `[project]\nname = "chat"\ndependencies = ["requests"]\n\n[project.optional-dependencies]\ndev = [${deps.map(dep => `"${dep}"`).join(', ')}]\n`
@@ -257,5 +262,24 @@ describe('prechecks/undeclared-dependency.mjs, end to end through precheck.mjs @
 
   test('stays quiet in a repo with no package.json at all', () => {
     assert.deepEqual(undeclaredFindings({}, { 'scripts/a.mjs': "import { parse } from 'yaml'\n" }), [])
+  })
+
+  test('a package.json that is not JSON fails this check, naming the file, and the other checks still run', () => {
+    const untestedError = "export function load() {\n  throw new Error('the widget cache is out of date')\n}\n"
+    const { result, summary, findings } = runPrecheck(
+      { 'package.json': '{ "name": "app", ' },
+      { 'src/a.ts': "import { parse } from 'yaml'\n", 'src/load.ts': untestedError },
+    )
+    assert.deepEqual(summary.failedChecks, [UNDECLARED_DEPENDENCY])
+    assert.match(result.stderr, /^lens-review: precheck undeclared-dependency failed: package\.json is not valid JSON/m)
+    assert.ok(findings.some(finding => finding.check === 'untested-failure-path' && finding.file === 'src/load.ts'), JSON.stringify(findings))
+  })
+
+  test('ignores a package.json that is not JSON under a fixture path', () => {
+    const findings = undeclaredFindings(
+      { ...WORKSPACE, 'tests/fixtures/broken/package.json': '{ "name": ' },
+      { 'src/a.ts': "import { parse } from 'yaml'\n" },
+    )
+    assert.deepEqual(findings.map(finding => finding.packages), [['yaml']])
   })
 })

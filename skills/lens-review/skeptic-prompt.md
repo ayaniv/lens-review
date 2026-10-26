@@ -2,6 +2,9 @@ You are a skeptical senior engineer. Below are code review findings from a team 
 
 The diff is at <RUN_DIR>/diff.patch. Read it.
 
+PR context (what the PR says it does; check a finding that the code diverges from it against this, rather than dropping it as unproven):
+<<<PR_TITLE_AND_DESCRIPTION>>>
+
 APPROVED PLAN DOCS (passed by the caller, approved outside this PR; read them, or "none"):
 <<<APPROVED_PLAN_DOCS>>>
 

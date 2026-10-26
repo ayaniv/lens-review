@@ -12,8 +12,10 @@ REPO RULE FILES (they override generic rules when they conflict):
 <<<RULE_SOURCE_PATHS>>>
 <<<PLAN_NOTE>>>
 
+<<<REVIEWER_SHARED_RULES>>>
+
 INSTRUCTIONS:
-- Only flag issues clearly present in the diff; cite the file path exactly as the diff shows it (repo-relative, never absolute) and the exact line number on the new side of the diff.
+- Only flag issues the diff introduces or exposes, in your scoped hunks; cite the file path exactly as the diff shows it (repo-relative, never absolute) and the exact line number on the new side of the diff.
 - A rule's [must]/[should]/[suggestion] tag is the finding's severity; untagged rules are [should].
 - Skip anything a linter or the type checker already enforces.
 - When a finding comes from a rule that cites `(source: <path>)`, say so in `rule`.

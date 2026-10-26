@@ -320,7 +320,7 @@ describe('reviewbench/agent.mjs — one PR under ReviewBench\'s agent contract',
 
   // ReviewBench mounts the PR's title and body at RB_PR_JSON; lens-review gets them as --context,
   // so a finding can hold the code to what the description promises.
-  describe('passes the PR description as --context @pending', () => {
+  describe('passes the PR description as --context', () => {
     const PR_TITLE = 'Check that the Copilot review is fresh'
     const PR_BODY = 'Adds CheckStatus(), which returns the pending and the fresh state in one pass.'
     let prJsonPath
@@ -368,6 +368,12 @@ describe('reviewbench/agent.mjs — one PR under ReviewBench\'s agent contract',
       fs.writeFileSync(prJsonPath, 'not json')
       env.RB_PR_JSON = prJsonPath
       assertRefusedBeforeClaude(runAgent(), /^lens-review: .*pr\.json/m)
+    })
+
+    test('refuses before starting claude when RB_PR_JSON has no title, naming the file', () => {
+      fs.writeFileSync(prJsonPath, JSON.stringify({ body: PR_BODY }))
+      env.RB_PR_JSON = prJsonPath
+      assertRefusedBeforeClaude(runAgent(), /^lens-review: .*pr\.json has no title/m)
     })
 
     test('refuses before starting claude when RB_PR_JSON names a missing file', () => {
