@@ -506,10 +506,131 @@ describe('merge-findings.mjs: one issue under two categories or two files', () =
     assert.deepEqual(findings[0].locations.map(({ file, line }) => `${file}:${line}`), ['supabase/seed.sql:57', 'src/seed.test.ts:99'])
   })
 
+  test('keeps the merged-in reports of a missing-test finding it folds into the precheck\'s', () => {
+    const missingTest = description => finding({ file: 'src/seed.test.ts', line: 99, category: 'tests', description })
+    const anthropicReport = missingTest("Nothing tests the 'no practice on weekday %' error the seed raises.")
+    const { findings } = mergeFindings([
+      [missingTest("The 'no practice on weekday %' branch of the seed has no test.")],
+      [{ ...anthropicReport, reviewer: 'Anthropic' }],
+      [untestedRaise],
+    ], diffLines)
+    assert.equal(findings.length, 1)
+    assert.deepEqual(findings[0].mergedReports.map(report => report.description), [anthropicReport.description])
+  })
+
   test('keeps a missing-test finding about a different error apart from the precheck', () => {
     const otherTest = finding({ file: 'src/seed.test.ts', line: 99, category: 'tests', reviewer: 'Deep Pass', description: 'The unknown area branch has no test.' })
     const { findings } = mergeFindings([[otherTest], [untestedRaise]], diffLines)
     assert.equal(findings.length, 2)
+  })
+})
+
+describe('merge-findings.mjs: two problems at one spot', () => {
+  // Modelled on the ReviewBench pilot (TechDebtMCP#135): two reviewers filed different security
+  // bugs on one line, and the merge kept only the first description, so the skeptic never saw
+  // the path traversal, the only high-severity issue the review found.
+  const DIFF = diffSection('src/server/handlers.ts', Array(460).fill('+x'))
+  let mergeFindings
+  let diffLines
+
+  beforeEach(async () => {
+    let parseDiffLines
+    ;({ mergeFindings, parseDiffLines } = await import(MERGE_FINDINGS))
+    diffLines = parseDiffLines(DIFF)
+  })
+
+  const handler = overrides => finding({ file: 'src/server/handlers.ts', line: 441, category: 'security', ...overrides })
+  const pathEcho = handler({
+    severity: 'suggestion',
+    reviewer: 'Deep Pass',
+    rule: 'error-message-path-leak',
+    description: "The new error message 'Could not read file stats for: ${path}' echoes the raw client-supplied path. The project security rules say to use getRelativePath() in client-facing errors. The size check also stats and then reads separately, so the file can change between the two calls (TOCTOU).",
+  })
+  const pathTraversal = handler({
+    severity: 'must',
+    reviewer: 'The Backend Reviewer',
+    rule: 'Path arguments are checked with `path.isAbsolute()` and normalized with `path.resolve()` before any filesystem operation. (source: CLAUDE.md)',
+    description: 'The user-supplied `path` argument is passed straight to `getFileStats(path)` (and the pre-existing `fileExists(path)` / `readFile(path)` calls) with no `path.isAbsolute()` check and no `path.resolve()` normalization, so a caller can read any file on disk.',
+  })
+
+  test('keeps two reviewers\' different problems on one line apart, each with its own description, rule and severity', () => {
+    const { findings } = mergeFindings([[pathEcho], [pathTraversal]], diffLines)
+    assert.equal(findings.length, 2)
+    const [echo, traversal] = findings
+    assert.deepEqual([echo.severity, echo.rule, echo.reviewers], ['suggestion', pathEcho.rule, ['Deep Pass']])
+    assert.deepEqual([traversal.severity, traversal.rule, traversal.reviewers], ['must', pathTraversal.rule, ['The Backend Reviewer']])
+    assert.equal(traversal.description, pathTraversal.description)
+  })
+
+  // The pilot's second loss: a non-regular-file report folded into a TOCTOU report on line 448.
+  test('keeps a non-regular-file report apart from a TOCTOU report that mentions the same race', () => {
+    const sizeGuard = overrides => handler({ line: 448, category: 'reliability', ...overrides })
+    const nonRegularFile = sizeGuard({
+      severity: 'must',
+      reviewer: 'The Reliability Engineer',
+      rule: '[must] Inputs at system boundaries (files) are validated before use',
+      description: 'The file-size guard in handleExecuteCustomRules relies only on stats.size. For a non-regular file (a character device such as /dev/zero, a FIFO, or a socket) stats.size is 0, so the guard passes and readFile reads without bound or blocks forever. Also reject when !stats.isFile(). The stat-then-read sequence is also not atomic.',
+    })
+    const toctou = sizeGuard({
+      severity: 'suggestion',
+      reviewer: 'Anthropic',
+      rule: 'Race between check and use (TOCTOU)',
+      description: 'The size guard is a stat() followed later by an unbounded readFile(). The file can grow between the two calls, so the cap is not strictly enforced and the full file is still loaded into memory.',
+    })
+    const { findings } = mergeFindings([[nonRegularFile], [toctou]], diffLines)
+    assert.equal(findings.length, 2)
+  })
+
+  test('never folds a terse report into a longer one that merely contains its few words', () => {
+    const terse = handler({ severity: 'suggestion', reviewer: 'Deep Pass', rule: undefined, description: 'Path leak.' })
+    const { findings } = mergeFindings([[terse], [pathTraversal]], diffLines)
+    assert.equal(findings.length, 2)
+  })
+
+  test('still merges two reviewers\' identical reports written without Latin words', () => {
+    const hebrew = reviewer => handler({ reviewer, rule: undefined, description: 'הנתיב מהמשתמש מגיע לקריאת הקובץ בלי בדיקה' })
+    const { findings } = mergeFindings([[hebrew('Deep Pass')], [hebrew('The Backend Reviewer')]], diffLines)
+    assert.equal(findings.length, 1)
+  })
+
+  test('still merges two reviewers\' identical reports too short to have any word to compare', () => {
+    const tooShort = reviewer => handler({ reviewer, rule: undefined, description: 'No.' })
+    const { findings } = mergeFindings([[tooShort('Deep Pass')], [tooShort('The Backend Reviewer')]], diffLines)
+    assert.equal(findings.length, 1)
+  })
+
+  const pagination = overrides => finding({ file: 'src/server/handlers.ts', line: 84, category: 'correctness', ...overrides })
+  const unpaginatedCommits = pagination({
+    severity: 'should',
+    reviewer: 'Deep Pass',
+    rule: 'API results are fully paginated',
+    description: 'The REST GET for pulls/commits is not paginated, so only the first page (30 items by default) is returned. For a PR with more than 30 commits the last commit is wrong and the freshness check compares against a stale date.',
+  })
+  const firstPageOnly = pagination({
+    severity: 'must',
+    reviewer: 'Anthropic',
+    rule: 'Paginate list endpoints',
+    description: 'The pulls/commits endpoint returns one page (30 items by default), so commits[len(commits)-1] is the 30th commit, not the last commit, on a PR with more than 30 commits. Paginate the request.',
+  })
+
+  test('still merges two reviewers\' differently worded reports of the same problem', () => {
+    const { findings } = mergeFindings([[unpaginatedCommits], [firstPageOnly]], diffLines)
+    assert.equal(findings.length, 1)
+    assert.equal(findings[0].severity, 'must')
+    assert.deepEqual(findings[0].reviewers, ['Deep Pass', 'Anthropic'])
+  })
+
+  test('keeps every merged-in reviewer\'s own report on the merged finding, so none is lost', () => {
+    const { findings } = mergeFindings([[unpaginatedCommits], [firstPageOnly]], diffLines)
+    assert.equal(findings[0].description, unpaginatedCommits.description)
+    assert.deepEqual(findings[0].mergedReports, [
+      { reviewer: 'Anthropic', severity: 'must', description: firstPageOnly.description, rule: firstPageOnly.rule },
+    ])
+  })
+
+  test('a finding no other reviewer merged into carries no merged reports', () => {
+    const { findings } = mergeFindings([[pathEcho]], diffLines)
+    assert.equal(findings[0].mergedReports, undefined)
   })
 })
 
@@ -607,6 +728,19 @@ describe('merge-findings.mjs: duplication across copies', () => {
       specsDiffLines,
     )
     assert.equal(findings.length, 2)
+  })
+
+  test('keeps the merged-in reports of every copy it folds, not only the first copy\'s', () => {
+    const laterCopyByGeneric = duplication('e2e/names-and-seats.spec.ts', 94, 'formatSeat and seatLabel copy the seat label logic.', { reviewer: 'Generic' })
+    const { findings } = mergeFindings(
+      [
+        [duplication('e2e/second-parent.spec.ts', 10, 'formatSeat repeats the seat label logic.'), duplication('e2e/names-and-seats.spec.ts', 94, 'formatSeat and seatLabel are defined here again.')],
+        [laterCopyByGeneric],
+      ],
+      specsDiffLines,
+    )
+    assert.equal(findings.length, 1)
+    assert.deepEqual(findings[0].mergedReports.map(report => report.description), [laterCopyByGeneric.description])
   })
 })
 

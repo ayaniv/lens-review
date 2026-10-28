@@ -255,6 +255,10 @@ describe('skill layout', () => {
     assert.match(readText(SKEPTIC_PROMPT), /Never drop a finding because another finding repeats it/)
   })
 
+  test("the skeptic weighs every merged-in reviewer's report, not only the first description", () => {
+    assert.match(readText(SKEPTIC_PROMPT).split('\n')[0], /`mergedReports`/)
+  })
+
   describe('skeptic check 4: which plan can justify a drop', () => {
     // render-prompts.mjs fills the lists; its own tests prove a PR-added doc never reaches the approved one.
     const skeptic = () => {
