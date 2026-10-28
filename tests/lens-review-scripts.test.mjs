@@ -562,6 +562,43 @@ describe('merge-findings.mjs: two problems at one spot', () => {
     assert.equal(traversal.description, pathTraversal.description)
   })
 
+  // The pilot's second loss: a non-regular-file report folded into a TOCTOU report on line 448.
+  test('keeps a non-regular-file report apart from a TOCTOU report that mentions the same race', () => {
+    const sizeGuard = overrides => handler({ line: 448, category: 'reliability', ...overrides })
+    const nonRegularFile = sizeGuard({
+      severity: 'must',
+      reviewer: 'The Reliability Engineer',
+      rule: '[must] Inputs at system boundaries (files) are validated before use',
+      description: 'The file-size guard in handleExecuteCustomRules relies only on stats.size. For a non-regular file (a character device such as /dev/zero, a FIFO, or a socket) stats.size is 0, so the guard passes and readFile reads without bound or blocks forever. Also reject when !stats.isFile(). The stat-then-read sequence is also not atomic.',
+    })
+    const toctou = sizeGuard({
+      severity: 'suggestion',
+      reviewer: 'Anthropic',
+      rule: 'Race between check and use (TOCTOU)',
+      description: 'The size guard is a stat() followed later by an unbounded readFile(). The file can grow between the two calls, so the cap is not strictly enforced and the full file is still loaded into memory.',
+    })
+    const { findings } = mergeFindings([[nonRegularFile], [toctou]], diffLines)
+    assert.equal(findings.length, 2)
+  })
+
+  test('never folds a terse report into a longer one that merely contains its few words', () => {
+    const terse = handler({ severity: 'suggestion', reviewer: 'Deep Pass', rule: undefined, description: 'Path leak.' })
+    const { findings } = mergeFindings([[terse], [pathTraversal]], diffLines)
+    assert.equal(findings.length, 2)
+  })
+
+  test('still merges two reviewers\' identical reports written without Latin words', () => {
+    const hebrew = reviewer => handler({ reviewer, rule: undefined, description: 'הנתיב מהמשתמש מגיע לקריאת הקובץ בלי בדיקה' })
+    const { findings } = mergeFindings([[hebrew('Deep Pass')], [hebrew('The Backend Reviewer')]], diffLines)
+    assert.equal(findings.length, 1)
+  })
+
+  test('still merges two reviewers\' identical reports too short to have any word to compare', () => {
+    const tooShort = reviewer => handler({ reviewer, rule: undefined, description: 'No.' })
+    const { findings } = mergeFindings([[tooShort('Deep Pass')], [tooShort('The Backend Reviewer')]], diffLines)
+    assert.equal(findings.length, 1)
+  })
+
   const pagination = overrides => finding({ file: 'src/server/handlers.ts', line: 84, category: 'correctness', ...overrides })
   const unpaginatedCommits = pagination({
     severity: 'should',

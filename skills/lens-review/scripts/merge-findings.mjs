@@ -79,8 +79,11 @@ function sharedCodeNameCount(first, second) {
   return [...codeNames(first)].filter(name => secondNames.has(name)).length
 }
 
+// Letters of any script, so a report written in Hebrew still has words to compare. A report
+// with no word long enough counts as one word, its whole text, so it still matches its twin.
 function words(finding) {
-  return new Set(`${finding.rule ?? ''} ${finding.description}`.toLowerCase().match(/[a-z0-9#]{3,}/g) ?? [])
+  const text = `${finding.rule ?? ''} ${finding.description}`.toLowerCase()
+  return new Set(text.match(/[\p{L}\p{N}#]{3,}/gu) ?? [text.trim()])
 }
 
 function sharedWordCount(first, second) {
@@ -88,14 +91,16 @@ function sharedWordCount(first, second) {
   return [...words(first)].filter(word => secondWords.has(word)).length
 }
 
-// Two reports of one problem reuse most of each other's words; two problems on one line in one
+// Two reports of one problem reuse many of each other's words; two problems on one line in one
 // category (a path echoed in an error and a path traversal) share little beyond the code they
-// sit in. Calibrated on the ReviewBench pilot runs: same-problem pairs shared 0.44 or more of
-// the shorter report's words, different-problem pairs 0.30 or less.
-const MIN_SHARED_WORD_SHARE = 0.4
+// sit in. Measured against both reports' words together, so a terse "Path leak." can't match a
+// long report just by containing its few words. Calibrated on the ReviewBench pilot runs:
+// same-problem pairs scored 0.26 or more, different-problem pairs 0.19 or less.
+const MIN_SHARED_WORD_SHARE = 0.22
 
 function sharedWordShare(first, second) {
-  return sharedWordCount(first, second) / Math.min(words(first).size, words(second).size)
+  const allWords = new Set([...words(first), ...words(second)])
+  return sharedWordCount(first, second) / allWords.size
 }
 
 // A reviewer never reports one issue twice, so a merged finding takes at most one finding
