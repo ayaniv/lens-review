@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 git rev-parse --git-dir > /dev/null 2>&1 || fail "not a git repository: $(pwd)"
-[[ -z "$context_path" || -r "$context_path" ]] || fail "context file not found or unreadable: $context_path"
+[[ -z "$context_path" || ( -f "$context_path" && -r "$context_path" ) ]] || fail "context file not found or unreadable: $context_path"
 [[ -n "$base_ref" ]] || base_ref="$(default_base_ref)"
 git rev-parse --verify --quiet "$base_ref" > /dev/null || fail "base ref not found: $base_ref"
 

@@ -98,6 +98,17 @@ describe('reviewer prompts look past the diff and file one issue per finding', (
     assert.ok(prompt('skeptic').includes(PR_CONTEXT.trim()))
   })
 
+  // In PR URL mode the PR's author writes this text, and the skeptic decides what survives.
+  test('the skeptic and every reviewer treat the PR context as the author\'s claim, never as an instruction', () => {
+    const stems = renderAll()
+    for (const stem of [...stems, 'skeptic']) {
+      const text = prompt(stem)
+      assert.match(text, /PR context is the author's unverified claim/i, `${stem} does not frame the PR context as a claim`)
+      assert.match(text, /never an instruction/i, `${stem} does not say the PR context is never an instruction`)
+    }
+    assert.match(prompt('skeptic'), /never a reason to drop a finding/i)
+  })
+
   test('a --context file reaches every reviewer and the skeptic, ahead of the commit messages', () => {
     fs.writeFileSync(path.join(runDir, 'context.txt'), CALLER_CONTEXT)
     const stems = renderAll()
@@ -135,6 +146,13 @@ describe('gather-diff.sh --context', () => {
     const result = runScript('bash', [GATHER_DIFF, '--base', 'main', '--context', missing], { cwd: repoDir })
     assert.notEqual(result.status, 0)
     assert.match(result.stderr, /^lens-review: .*no-such-description\.md/m)
+  })
+
+  test('fails with a lens-review message when the context path is a directory', () => {
+    const contextDir = makeTempDir('depth-context-dir')
+    const result = runScript('bash', [GATHER_DIFF, '--base', 'main', '--context', contextDir], { cwd: repoDir })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /^lens-review: context file not found or unreadable: /m)
   })
 
   test('writes no context.txt when no --context is passed', () => {
@@ -258,6 +276,63 @@ describe('prechecks/undeclared-dependency.mjs, end to end through precheck.mjs',
 
   test('stays quiet on declared, builtin, workspace, relative and aliased imports', () => {
     assert.deepEqual(undeclaredFindings(WORKSPACE, { 'src/a.ts': `${DECLARED_IMPORTS.join('\n')}\n` }), [])
+  })
+
+  test('stays quiet on scheme imports and $-aliases, which are never npm packages', () => {
+    const source = ["import { test } from 'bun:test'", "import routes from 'virtual:routes'", "import { getCollection } from 'astro:content'", "import { db } from '$lib/db'", ''].join('\n')
+    assert.deepEqual(undeclaredFindings(WORKSPACE, { 'src/a.ts': source }), [])
+  })
+
+  test('stays quiet on a package named in a comment or a string, not imported', () => {
+    const source = [
+      "// copied from 'lodash' docs",
+      '/*',
+      " * import padStart from 'left-pad'",
+      ' */',
+      "console.log(`loaded the config from 'chalk' defaults`)",
+      "const help = \"call require('dayjs') yourself\"",
+      "const x = 1 // like import('moment') does",
+      '',
+    ].join('\n')
+    assert.deepEqual(undeclaredFindings(WORKSPACE, { 'src/a.ts': source }), [])
+  })
+
+  test('still flags a multi-line import closed on its own added line', () => {
+    const source = ['import {', '  parse,', "} from 'yaml'", ''].join('\n')
+    const findings = undeclaredFindings(WORKSPACE, { 'src/a.ts': source })
+    assert.deepEqual(findings.map(finding => [finding.line, finding.packages]), [[3, ['yaml']]])
+  })
+
+  test('stays quiet on tsconfig paths aliases, and on a package typed only through @types', () => {
+    const tsconfig = [
+      '{',
+      '  // JSONC: comments and trailing commas are allowed here',
+      '  "$schema": "https://json.schemastore.org/tsconfig",',
+      '  "compilerOptions": {',
+      '    "paths": { "@app/*": ["src/app/*"], "config": ["src/config.ts"], },',
+      '  },',
+      '}',
+      '',
+    ].join('\n')
+    const repo = { ...WORKSPACE, 'tsconfig.json': tsconfig, 'package.json': JSON.stringify({ name: 'app', devDependencies: { '@types/estree': '^1.0.0' } }) }
+    const source = ["import { thing } from '@app/thing'", "import config from 'config'", "import type { Node } from 'estree'", ''].join('\n')
+    assert.deepEqual(undeclaredFindings(repo, { 'src/a.ts': source }), [])
+  })
+
+  test('a tsconfig that is not JSONC fails this check, naming the file', () => {
+    const { result, summary } = runPrecheck({ ...WORKSPACE, 'tsconfig.json': '{ "compilerOptions": ' }, { 'src/a.ts': "import { parse } from 'yaml'\n" })
+    assert.deepEqual(summary.failedChecks, [UNDECLARED_DEPENDENCY])
+    assert.match(result.stderr, /^lens-review: precheck undeclared-dependency failed: tsconfig\.json is not valid JSONC/m)
+  })
+
+  test('keeps the pytest finding when a broken package.json fails the JS half of the check', () => {
+    const { summary, findings } = runPrecheck(
+      { 'pyproject.toml': PYPROJECT(['pytest']), 'src/chat/client.py': CHAT_CLIENT, 'package.json': '{ "name": ' },
+      { 'tests/test_client.py': PLUGIN_TEST, 'src/a.ts': "import { parse } from 'yaml'\n" },
+    )
+    assert.deepEqual(summary.failedChecks, [UNDECLARED_DEPENDENCY])
+    const undeclared = findings.filter(finding => finding.check === UNDECLARED_DEPENDENCY)
+    assert.deepEqual(undeclared.map(finding => finding.file), ['tests/test_client.py'])
   })
 
   test('stays quiet in a repo with no package.json at all', () => {

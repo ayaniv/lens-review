@@ -40,6 +40,7 @@ export function runPrechecks(change, checks = CHECKS) {
     try {
       findings.push(...check(change))
     } catch (error) {
+      findings.push(...(error.findings ?? []))
       failedChecks.push({ check: name, reason: error.message })
     }
   }
