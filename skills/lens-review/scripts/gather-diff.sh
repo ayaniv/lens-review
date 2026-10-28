@@ -10,6 +10,8 @@
 #   gather-diff.sh [--base <ref>]     diff <ref>...HEAD of the repo in the cwd (default: the
 #                                     remote's default branch, else a local main, else master)
 #   gather-diff.sh --diff <patch>     review an existing patch file (e.g. saved from `gh pr diff`)
+#   ... --context <file>              also copy the PR's description (or other intent text) to
+#                                     context.txt, which every reviewer and the skeptic read
 set -euo pipefail
 
 fail() {
@@ -34,15 +36,18 @@ default_base_ref() {
 
 base_ref=""
 patch_path=""
+context_path=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base) base_ref="${2:?--base needs a ref}"; shift 2 ;;
     --diff) patch_path="${2:?--diff needs a patch file}"; shift 2 ;;
+    --context) context_path="${2:?--context needs a file}"; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
 
 git rev-parse --git-dir > /dev/null 2>&1 || fail "not a git repository: $(pwd)"
+[[ -z "$context_path" || ( -f "$context_path" && -r "$context_path" ) ]] || fail "context file not found or unreadable: $context_path"
 [[ -n "$base_ref" ]] || base_ref="$(default_base_ref)"
 git rev-parse --verify --quiet "$base_ref" > /dev/null || fail "base ref not found: $base_ref"
 
@@ -63,5 +68,6 @@ else
 fi
 
 [[ -s "$run_dir/diff.patch" && -s "$run_dir/files.txt" ]] || fail "empty diff — nothing to review (run dir: $run_dir)"
+[[ -z "$context_path" ]] || cp "$context_path" "$run_dir/context.txt"
 
 echo "$run_dir"

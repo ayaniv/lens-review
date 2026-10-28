@@ -25,6 +25,7 @@ Run from inside the repo you want reviewed:
 /lens-review --base develop                    # current branch vs another base ref
 /lens-review https://github.com/org/repo/pull/123   # a GitHub PR
 /lens-review --plan ../tasks/x/tech-design.md  # also check the PR against a plan it doesn't carry
+/lens-review --context pr-description.md      # hold the code to what the PR's description promises
 /lens-review --taste ~/.claude/CLAUDE.md --recast  # cast your own engineering taste into the team
 /lens-review --recast                          # throw away the saved team and cast a fresh one
 ```
@@ -34,6 +35,8 @@ The base defaults to the remote's default branch, then a local `main`, then `mas
 **Your own taste (opt-in).** `--taste <path>` adds your personal rules file, e.g. the "engineering taste" section of `~/.claude/CLAUDE.md`, to the rule sources the team is cast from. Each of its rules lands in the persona that owns that lens, marked `(source: taste)`, and the repo's own rules win where the two conflict. To set it once, export `LENS_REVIEW_TASTE=<path>`; `--taste` overrides it. Nothing else under `~/.claude` is ever read. The taste is baked into the team when it's cast, so after changing which taste file you use (or editing it), run once with `--recast`.
 
 A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `design*.md`, `plan*.md`, `spec*.md`) is found on its own. The Domain Expert, the Data Steward and the skeptic read it, so a PR that overtakes a sibling milestone is judged against that plan. A plan the PR writes for itself is only context, though: the skeptic drops a finding for what a plan asks only when that plan came in through `--plan`, and never drops a correctness or security finding on a plan's say-so.
+
+**The PR's description (optional).** `--context <path>` hands every reviewer and the skeptic the PR's description, or any other text saying what the PR is meant to do, ahead of the commit messages, so a change that doesn't do what it promises can be flagged. A review of a PR URL already reads the PR's title and body, so pass `--context` there only for intent beyond them.
 
 **Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
 

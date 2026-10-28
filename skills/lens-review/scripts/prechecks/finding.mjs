@@ -3,6 +3,15 @@
 
 export const PRECHECK_REVIEWER = 'Precheck'
 
+// Thrown by a check that fails after it has already found some issues: runPrechecks reports the
+// failure and still keeps those findings.
+export class PartialPrecheckError extends Error {
+  constructor(message, findings) {
+    super(message)
+    this.findings = findings
+  }
+}
+
 export function precheckFinding({ check, file, line, severity = 'should', category, description, rule, ...extra }) {
   return { file, line, severity, category, description, rule, reviewer: PRECHECK_REVIEWER, check, ...extra }
 }

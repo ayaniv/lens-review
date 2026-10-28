@@ -20,6 +20,7 @@ import { duplicateInDiff } from './prechecks/duplicate-in-diff.mjs'
 import { newlyUnused } from './prechecks/newly-unused.mjs'
 import { migrationOrder } from './prechecks/migration-order.mjs'
 import { uncheckedField } from './prechecks/unchecked-field.mjs'
+import { undeclaredDependency } from './prechecks/undeclared-dependency.mjs'
 
 export const CHECKS = {
   'untested-failure-path': untestedFailurePath,
@@ -27,6 +28,7 @@ export const CHECKS = {
   'newly-unused': newlyUnused,
   'migration-order': migrationOrder,
   'unchecked-field': uncheckedField,
+  'undeclared-dependency': undeclaredDependency,
 }
 
 // A check that throws is reported and skipped: one broken heuristic must not cost the review
@@ -38,6 +40,7 @@ export function runPrechecks(change, checks = CHECKS) {
     try {
       findings.push(...check(change))
     } catch (error) {
+      findings.push(...(error.findings ?? []))
       failedChecks.push({ check: name, reason: error.message })
     }
   }

@@ -317,6 +317,70 @@ describe('reviewbench/agent.mjs — one PR under ReviewBench\'s agent contract',
     assert.match(result.stderr, /^lens-review: .*Findings JSON/m)
     assert.equal(fs.existsSync(env.RB_OUT), false)
   })
+
+  // ReviewBench mounts the PR's title and body at RB_PR_JSON; lens-review gets them as --context,
+  // so a finding can hold the code to what the description promises.
+  describe('passes the PR description as --context', () => {
+    const PR_TITLE = 'Check that the Copilot review is fresh'
+    const PR_BODY = 'Adds CheckStatus(), which returns the pending and the fresh state in one pass.'
+    let prJsonPath
+
+    beforeEach(() => {
+      prJsonPath = path.join(makeTempDir('reviewbench-pr'), 'pr.json')
+      fs.writeFileSync(prJsonPath, JSON.stringify({ repo: `https://github.com/${NWO}`, pr_number: PR_NUMBER, base, head, nwo: NWO, title: PR_TITLE, body: PR_BODY }))
+    })
+
+    function contextPathFromPrompt() {
+      const args = readText(argsFile).split('\n')
+      const prompt = args[args.indexOf('-p') + 1]
+      const match = prompt.match(/^\/lens-review --base (\S+) --context (\S+)$/)
+      assert.ok(match, `no --context in the prompt: ${prompt}`)
+      assert.equal(match[1], base)
+      return match[2]
+    }
+
+    test('writes the title and body to a file and passes it with --context', () => {
+      env.RB_PR_JSON = prJsonPath
+      const result = runAgent()
+      assert.equal(result.status, 0, result.stderr)
+      const context = readText(contextPathFromPrompt())
+      assert.ok(context.startsWith(PR_TITLE), context)
+      assert.ok(context.includes(PR_BODY), context)
+    })
+
+    test('passes the title alone when the PR has no body', () => {
+      fs.writeFileSync(prJsonPath, JSON.stringify({ title: PR_TITLE, body: null }))
+      env.RB_PR_JSON = prJsonPath
+      const result = runAgent()
+      assert.equal(result.status, 0, result.stderr)
+      assert.equal(readText(contextPathFromPrompt()).trim(), PR_TITLE)
+    })
+
+    test('keeps the prompt unchanged when RB_PR_JSON is not set', () => {
+      delete env.RB_PR_JSON
+      const result = runAgent()
+      assert.equal(result.status, 0, result.stderr)
+      const args = readText(argsFile).split('\n')
+      assert.equal(args[args.indexOf('-p') + 1], `/lens-review --base ${base}`)
+    })
+
+    test('refuses before starting claude when RB_PR_JSON is not JSON, naming the file', () => {
+      fs.writeFileSync(prJsonPath, 'not json')
+      env.RB_PR_JSON = prJsonPath
+      assertRefusedBeforeClaude(runAgent(), /^lens-review: .*pr\.json/m)
+    })
+
+    test('refuses before starting claude when RB_PR_JSON has no title, naming the file', () => {
+      fs.writeFileSync(prJsonPath, JSON.stringify({ body: PR_BODY }))
+      env.RB_PR_JSON = prJsonPath
+      assertRefusedBeforeClaude(runAgent(), /^lens-review: .*pr\.json has no title/m)
+    })
+
+    test('refuses before starting claude when RB_PR_JSON names a missing file', () => {
+      env.RB_PR_JSON = path.join(path.dirname(prJsonPath), 'missing', 'pr.json')
+      assertRefusedBeforeClaude(runAgent(), /^lens-review: .*pr\.json/m)
+    })
+  })
 })
 
 describe('reviewbench/Dockerfile — the image ReviewBench runs once per PR', () => {
