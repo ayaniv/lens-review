@@ -135,7 +135,7 @@ function successfulResultEvent(events, logPath) {
 }
 
 // The result event holds only claude's last message, and Step 6 always speaks after the report
-// (in the container its `gh pr view` is denied, so the run ends "Not offered for posting"). So
+// (in the container its `gh pr view` is denied, so the run ends "Not posted"). So
 // the report is searched for in every assistant text block too, and the last line found wins.
 function streamTexts(events) {
   return events.flatMap(event => {
