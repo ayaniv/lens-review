@@ -1,4 +1,4 @@
-// Builds the GitHub review that Step 6 offers to post: one review on the PR's head commit, the
+// Builds the GitHub review that Step 6 posts: one review on the PR's head commit, the
 // summary as its body, and each final finding as an inline comment on its line. The review is a
 // COMMENT, or an APPROVE with --approve. It is never a change request. A
 // finding GitHub can't anchor (its line isn't in the PR's diff) goes into the body instead,
