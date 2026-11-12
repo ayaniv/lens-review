@@ -101,7 +101,7 @@ describe('reviewbench/to-reviewbench.mjs — lens-review findings in the judge\'
 // any extra raw lines before it. With `isReportBeforeStep6`, the report is an earlier assistant
 // message and the run ends on Step 6's line, as a real run in the container does: the result
 // event carries only claude's last message.
-const STEP6_LINE = 'Not offered for posting: gh is not available.'
+const STEP6_LINE = 'Not posted: gh is not available.'
 
 function assistantEvent(text) {
   return { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } }

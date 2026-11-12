@@ -38,12 +38,12 @@ A plan or intent doc the PR adds or changes (`INTENT.md`, `tech-design*.md`, `de
 
 **The PR's description (optional).** `--context <path>` hands every reviewer and the skeptic the PR's description, or any other text saying what the PR is meant to do, ahead of the commit messages, so a change that doesn't do what it promises can be flagged. A review of a PR URL already reads the PR's title and body, so pass `--context` there only for intent beyond them.
 
-**Posting to the PR.** When the review is of an open GitHub PR, it shows you exactly what it would post and asks whether to post it there. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR. Answer no and it stays in your terminal. If you answer yes:
+**Posting to the PR.** When the review is of an open GitHub PR, it posts the review there without asking. That covers a PR you passed by URL, and a branch you reviewed that already has an open PR.
 
 - Each finding becomes an inline comment on its line. The summary, strengths and verdict make up the review body.
 - A finding whose line isn't part of the PR's diff is listed in the body instead, so nothing is dropped.
-- It always posts as a plain **Comment** review, never Approve or Request changes.
-- It won't offer to post if the PR's head isn't the commit it reviewed (unpushed local commits, or new pushes during the review), because the comments would land on the wrong lines.
+- It posts a plain **Comment** review, never Request changes. When the verdict is APPROVED and the PR is not yours, it asks first whether to approve; any answer but yes posts a Comment.
+- It doesn't post if the PR's head isn't the commit it reviewed (unpushed local commits, or new pushes during the review), because the comments would land on the wrong lines.
 
 ## The team
 
