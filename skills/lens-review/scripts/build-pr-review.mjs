@@ -1,10 +1,11 @@
-// Builds the GitHub review that Step 6 offers to post: one COMMENT review on the PR's head commit,
-// the summary as its body, and each final finding as an inline comment on its line. A
+// Builds the GitHub review that Step 6 offers to post: one review on the PR's head commit, the
+// summary as its body, and each final finding as an inline comment on its line. The review is a
+// COMMENT, or an APPROVE with --approve. It is never a change request. A
 // finding GitHub can't anchor (its line isn't in the PR's diff) goes into the body instead,
 // so nothing the skeptic kept is lost.
 //
 //   node build-pr-review.mjs --findings <final-findings.json> --diff <diff.patch> \
-//     --summary <summary.md> --commit <head sha>   → review payload JSON on stdout
+//     --summary <summary.md> --commit <head sha> [--approve]   → review payload JSON on stdout
 import { fail, isRunDirectly, readJsonArrayFile, readTextFile } from './lib/cli.mjs'
 import { isLineInDiff, parseDiffLines, SEVERITIES } from './merge-findings.mjs'
 
@@ -48,10 +49,15 @@ function bodyOnlyLine(finding) {
   return `- **${SEVERITY_LABELS[finding.severity]}** [${finding.category}] ${finding.description} — ${location}${duplicatesNote(finding)}${locationsNote(finding, { separator: '\n', indent: '  ' })}`
 }
 
-export function buildPrReview({ findings, diffLines, summary, commitId }) {
+export function buildPrReview({ findings, diffLines, summary, commitId, approve = false }) {
   for (const finding of findings) {
     const reason = unrenderableReason(finding)
     if (reason) throw new Error(`finding ${finding?.id ?? JSON.stringify(finding)}: ${reason}`)
+  }
+  // A Must Fix finding makes the verdict CHANGES REQUIRED, so an approval would contradict it.
+  const mustFix = findings.filter(finding => finding.severity === 'must')
+  if (approve && mustFix.length > 0) {
+    throw new Error(`--approve refused: ${mustFix.map(finding => finding.id).join(', ')} must be fixed first`)
   }
   const inline = findings.filter(finding => isLineInDiff(diffLines, finding.file, finding.line))
   const bodyOnly = findings.filter(finding => !inline.includes(finding))
@@ -59,7 +65,7 @@ export function buildPrReview({ findings, diffLines, summary, commitId }) {
     bodyOnly.length > 0 ? `\n\n### Not on a changed line (${bodyOnly.length})\n${bodyOnly.map(bodyOnlyLine).join('\n')}` : ''
   return {
     commit_id: commitId,
-    event: 'COMMENT',
+    event: approve ? 'APPROVE' : 'COMMENT',
     body: `${summary.trim()}${bodyOnlySection}\n\n${REVIEW_MARKER}`,
     comments: inline.map(finding => ({
       path: finding.file,
@@ -76,7 +82,7 @@ function flagValue(args, flag) {
 }
 
 if (isRunDirectly(import.meta.url)) {
-  const usage = 'usage: build-pr-review.mjs --findings <final-findings.json> --diff <diff.patch> --summary <summary.md> --commit <head sha>'
+  const usage = 'usage: build-pr-review.mjs --findings <final-findings.json> --diff <diff.patch> --summary <summary.md> --commit <head sha> [--approve]'
   const args = process.argv.slice(2)
   const [findingsPath, diffPath, summaryPath, commitId] = ['--findings', '--diff', '--summary', '--commit'].map(flag =>
     flagValue(args, flag),
@@ -90,6 +96,7 @@ if (isRunDirectly(import.meta.url)) {
       diffLines: parseDiffLines(readTextFile(diffPath)),
       summary: readTextFile(summaryPath),
       commitId,
+      approve: args.includes('--approve'),
     })
     const bodyOnlyCount = findings.length - review.comments.length
     console.error(`lens-review: ${review.comments.length} inline, ${bodyOnlyCount} in the review body`)

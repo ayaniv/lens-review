@@ -1430,10 +1430,31 @@ describe('build-pr-review.mjs', () => {
     ])
   }
 
-  test('always posts as a plain COMMENT review on the head commit, never an approval or a block', () => {
+  test('posts a plain COMMENT review on the head commit by default, never a block', () => {
     const review = buildPrReview({ findings: [finalFinding()], diffLines, summary: SUMMARY, commitId: HEAD_SHA })
     assert.equal(review.event, 'COMMENT')
     assert.equal(review.commit_id, HEAD_SHA)
+  })
+
+  test('posts an APPROVE review with --approve when no finding is Must Fix', () => {
+    const findings = [finalFinding({ severity: 'should' }), finalFinding({ id: 'F2', severity: 'suggestion' })]
+    const review = buildPrReview({ findings, diffLines, summary: SUMMARY, commitId: HEAD_SHA, approve: true })
+    assert.equal(review.event, 'APPROVE')
+  })
+
+  test('refuses --approve when a finding is Must Fix, naming it, since the verdict is then CHANGES REQUIRED', () => {
+    fs.writeFileSync(path.join(inputDir, 'final-findings.json'), JSON.stringify([finalFinding({ id: 'F4', severity: 'must' })]))
+    const result = runScript('node', [
+      BUILD_PR_REVIEW,
+      '--findings', path.join(inputDir, 'final-findings.json'),
+      '--diff', path.join(inputDir, 'diff.patch'),
+      '--summary', path.join(inputDir, 'summary.md'),
+      '--commit', HEAD_SHA,
+      '--approve',
+    ])
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /--approve refused: F4/)
+    assert.equal(result.stdout, '')
   })
 
   test('puts a finding on a changed line inline, on the new side, with its severity, category and rule', () => {

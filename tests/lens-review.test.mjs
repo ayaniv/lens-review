@@ -404,6 +404,8 @@ describe('team', () => {
     assert.match(postStep, /Not offered for posting: <first line of gh's error>/, 'no PR must be reported, not silent')
     assert.match(postStep, /differs from `<RUN_DIR>\/head\.txt`, do not offer to post/)
     assert.match(postStep, /Post this review to <url> as inline comments\? \(yes\/no\)/)
+    assert.match(postStep, /Post this review to <url> as inline comments and approve the PR\? \(yes\/no\)/)
+    assert.match(postStep, /`--approve` only when the verdict is \*\*APPROVED\*\* and the PR's author/, 'approve only an APPROVED verdict, and never your own PR')
     assert.match(postStep, /On anything but an explicit yes, print `Not posted\.`/)
     assert.match(postStep, /gh pr diff <url> > "<RUN_DIR>\/pr-diff\.patch"/, 'comments must be built against the PR\'s own diff')
     assert.match(postStep, /scripts\/build-pr-review\.mjs/)
